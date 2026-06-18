@@ -1574,4 +1574,6 @@ if os.environ.get("SURVOM_DEBUG_CALLBACKS") == "1":
 
 
 if __name__ == "__main__":
-    app.run(debug=False, host="127.0.0.1", port=8056)
+    host = os.environ.get("SURVOM_DASH_HOST", "127.0.0.1")
+    port = int(os.environ.get("SURVOM_DASH_PORT", "8056"))
+    app.run(debug=False, host=host, port=port)
