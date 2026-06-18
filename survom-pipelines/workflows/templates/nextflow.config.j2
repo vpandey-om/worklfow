@@ -1,0 +1,96 @@
+params {
+  input = null
+  outdir = 'results'
+  run_id = '{{ request.run_id }}'
+  aws_queue = null
+  aws_region = 'eu-north-1'
+  aws_workdir = null
+  threads = 4
+  custom_adapters = null
+  custom_contaminants = null
+  quality_threshold = 20
+  minimum_read_length = 20
+  trim_poly_g = 'auto'
+  trim_poly_x = false
+  adapter_sequence_r1 = null
+  adapter_sequence_r2 = null
+  adapter_fasta = null
+  trim_front_r1 = 0
+  trim_front_r2 = 0
+  detect_adapter_for_pe = true
+  cutadapt_error_rate = 0.1
+  cutadapt_min_overlap = 3
+  cutadapt_minimum_overlap = 3
+}
+
+profiles {
+  local {
+    process.executor = 'local'
+  }
+
+  docker {
+    docker.enabled = true
+  }
+
+  singularity {
+    singularity.enabled = true
+    singularity.autoMounts = true
+  }
+
+  aws {
+    process.executor = 'awsbatch'
+    process.queue = params.aws_queue
+    aws.region = params.aws_region
+    docker.enabled = true
+    workDir = params.aws_workdir
+  }
+}
+
+process {
+  withLabel:process_low {
+    cpus = 1
+    memory = '2 GB'
+  }
+
+  withLabel:process_medium {
+    cpus = params.threads ?: 4
+    memory = '8 GB'
+  }
+
+  withLabel:process_high {
+    cpus = params.threads ?: 8
+    memory = '32 GB'
+  }
+
+{% for step in steps %}
+{% if step.step_id == 'rnaseq_04_adapter_quality_trimming' and params.get('trimming_tool') == 'cutadapt' %}
+  withName:CUTADAPT {
+    cpus = {{ step.resources.get('cpus', 4) }}
+    memory = '{{ step.resources.get('memory', '8.GB') | replace('.', ' ') }}'
+    time = '6h'
+    container = '{{ step.containers.get('cutadapt', 'quay.io/biocontainers/cutadapt:5.1--py312h0fa9677_0') }}'
+  }
+{% elif step.step_id == 'rnaseq_04_adapter_quality_trimming' %}
+  withName:FASTP {
+    cpus = {{ step.resources.get('cpus', 4) }}
+    memory = '{{ step.resources.get('memory', '8.GB') | replace('.', ' ') }}'
+{% if step.containers %}
+    container = '{{ step.containers.get('fastp', step.containers.get(step.default_tool)) }}'
+{% endif %}
+  }
+{% else %}
+  withName:{{ step.process_name }} {
+    cpus = {{ step.resources.get('cpus', 4) }}
+    memory = '{{ step.resources.get('memory', '8.GB') | replace('.', ' ') }}'
+{% if step.containers %}
+    container = '{{ step.containers.get(step.default_tool) }}'
+{% endif %}
+  }
+{% endif %}
+{% endfor %}
+
+  withName:MAKE_PREPROCESS_MANIFEST {
+    cpus = 1
+    memory = '2 GB'
+  }
+}

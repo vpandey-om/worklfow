@@ -1,0 +1,260 @@
+version: "1.0"
+steps:
+  rnaseq_03_raw_read_qc:
+    step_id: rnaseq_03_raw_read_qc
+    step_name: Raw Read Quality Control
+    category: COMMON
+    omics: [rnaseq, genomics, atacseq, chipseq, methylation]
+    purpose: Assess sequencing quality before modifying reads.
+    module_path: modules/common/fastqc/main.nf
+    process_name: FASTQC
+    default_tool: fastqc
+    fallback_tool: falco
+    can_run_individually: true
+    can_be_skipped: false
+    depends_on:
+      - rnaseq_02_fastq_staging_integrity
+    optional_depends_on: []
+    compatible_previous_outputs:
+      - staged_fastq_manifest
+      - fastq_manifest
+      - raw_fastq_files
+    required_inputs:
+      - name: fastq_manifest
+        type: manifest
+        formats: [csv, tsv, json]
+        required: true
+      - name: fastq_1
+        type: file
+        formats: [fastq, fastq.gz, fq, fq.gz]
+        required: true
+      - name: fastq_2
+        type: file
+        formats: [fastq, fastq.gz, fq, fq.gz]
+        required_when: library_layout == paired
+    outputs:
+      - name: fastqc_html
+        type: file
+        pattern: "03_raw_qc/fastqc/*_fastqc.html"
+        ui_visible: true
+      - name: fastqc_zip
+        type: file
+        pattern: "03_raw_qc/fastqc/*_fastqc.zip"
+        ui_visible: true
+      - name: raw_qc_summary
+        type: json
+        pattern: "03_raw_qc/raw_qc_summary.json"
+        ui_visible: true
+      - name: raw_qc_status
+        type: tsv
+        pattern: "03_raw_qc/raw_qc_status.tsv"
+        ui_visible: true
+    parameters:
+      run_raw_qc:
+        type: boolean
+        default: true
+        exposure: user
+        ui_label: Run raw read QC
+      qc_tool:
+        type: enum
+        choices: [fastqc, falco]
+        default: fastqc
+        exposure: expert
+        ui_label: QC tool
+      threads:
+        type: integer
+        default: 4
+        min: 1
+        max: 32
+        exposure: internal
+      custom_adapters:
+        type: file
+        default: null
+        exposure: expert
+      custom_contaminants:
+        type: file
+        default: null
+        exposure: expert
+    next_steps:
+      recommended:
+        - rnaseq_04_adapter_quality_trimming
+      allowed:
+        - rnaseq_04_adapter_quality_trimming
+        - rnaseq_07_salmon_quantification
+        - rnaseq_09_star_alignment
+    resources:
+      cpus: 4
+      memory: 8.GB
+      time: 2.h
+    containers:
+      fastqc: quay.io/biocontainers/fastqc:0.12.1--hdfd78af_0
+      falco: quay.io/biocontainers/falco:1.3.2--h077b44d_0
+    ui:
+      card_title: Check raw FASTQ quality
+      card_description: Detect adapter contamination, low-quality cycles, GC bias, duplication, and overrepresented sequences.
+      mode: automated
+      expose_in_guided: true
+    chat_guidance:
+      beginner: "I will check the raw FASTQ quality first using FastQC."
+      expert: "Use Falco only for large cohorts or speed-sensitive runs."
+
+  rnaseq_04_adapter_quality_trimming:
+    step_id: rnaseq_04_adapter_quality_trimming
+    step_name: Adapter and Quality Trimming
+    category: COMMON
+    omics: [rnaseq, genomics, atacseq, chipseq, methylation]
+    purpose: Remove adapters, poor-quality read tails, and platform-specific artifacts before mapping or quantification.
+    module_path: modules/common/fastp/main.nf
+    process_name: FASTP
+    default_tool: fastp
+    fallback_tool: cutadapt
+    can_run_individually: true
+    can_be_skipped: true
+    skip_conditions:
+      - raw QC shows no adapter contamination and high read quality
+      - expert user explicitly selects no trimming
+    depends_on:
+      - rnaseq_03_raw_read_qc
+    optional_depends_on:
+      - rnaseq_02_fastq_staging_integrity
+    compatible_previous_outputs:
+      - staged_fastq_manifest
+      - raw_qc_summary
+      - raw_fastq_files
+    required_inputs:
+      - name: fastq_manifest
+        type: manifest
+        formats: [csv, tsv, json]
+        required: true
+      - name: fastq_1
+        type: file
+        formats: [fastq, fastq.gz, fq, fq.gz]
+        required: true
+      - name: fastq_2
+        type: file
+        formats: [fastq, fastq.gz, fq, fq.gz]
+        required_when: library_layout == paired
+    outputs:
+      - name: trimmed_fastq_manifest
+        type: tsv
+        pattern: "04_trimmed/trimmed_fastq_manifest.tsv"
+        ui_visible: true
+      - name: trimmed_fastq
+        type: file
+        pattern: "04_trimmed/*.trimmed.fastq.gz"
+        ui_visible: true
+      - name: trimming_html
+        type: file
+        pattern: "04_trimmed/*.fastp.html"
+        ui_visible: true
+      - name: trimming_json
+        type: json
+        pattern: "04_trimmed/*.fastp.json"
+        ui_visible: true
+      - name: trimming_summary
+        type: json
+        pattern: "04_trimmed/trimming_summary.json"
+        ui_visible: true
+    parameters:
+      run_trimming:
+        type: boolean
+        default: true
+        exposure: user
+        ui_label: Run adapter and quality trimming
+      trimming_tool:
+        type: enum
+        choices: [fastp, cutadapt]
+        default: fastp
+        exposure: expert
+        ui_label: Trimming tool
+      quality_threshold:
+        type: integer
+        default: 20
+        min: 5
+        max: 35
+        exposure: user
+        ui_label: Minimum base quality
+      minimum_read_length:
+        type: integer
+        default: 20
+        min: 10
+        max: 100
+        exposure: user
+        ui_label: Minimum read length after trimming
+      trim_poly_g:
+        type: enum
+        choices: [auto, true, false]
+        default: auto
+        exposure: user
+        ui_label: Trim polyG tails
+      trim_poly_x:
+        type: boolean
+        default: false
+        exposure: user
+        ui_label: Trim polyX tails
+      adapter_sequence_r1:
+        type: string
+        default: null
+        exposure: expert
+      adapter_sequence_r2:
+        type: string
+        default: null
+        exposure: expert
+      adapter_fasta:
+        type: string
+        default: null
+        exposure: expert
+      trim_front_r1:
+        type: integer
+        default: 0
+        min: 0
+        max: 50
+        exposure: expert
+      trim_front_r2:
+        type: integer
+        default: 0
+        min: 0
+        max: 50
+        exposure: expert
+      detect_adapter_for_pe:
+        type: boolean
+        default: true
+        exposure: internal
+      cutadapt_error_rate:
+        type: float
+        default: 0.1
+        min: 0
+        max: 0.3
+        exposure: expert
+      cutadapt_minimum_overlap:
+        type: integer
+        default: 3
+        min: 1
+        max: 20
+        exposure: expert
+      threads:
+        type: integer
+        default: 4
+        exposure: internal
+    next_steps:
+      recommended:
+        - rnaseq_05_post_trim_quality_control
+      allowed:
+        - rnaseq_05_post_trim_quality_control
+        - rnaseq_07_salmon_quantification
+        - rnaseq_09_star_alignment
+    resources:
+      cpus: 4
+      memory: 8.GB
+      time: 4.h
+    containers:
+      fastp: quay.io/biocontainers/fastp:0.23.4--h5f740d0_0
+      cutadapt: quay.io/biocontainers/cutadapt:5.1--py312h0fa9677_0
+    ui:
+      card_title: Trim adapters and low-quality reads
+      card_description: Clean reads before alignment or quantification.
+      mode: configurable
+      expose_in_guided: true
+    chat_guidance:
+      beginner: "I recommend fastp with Q20, minimum length 20, and automatic polyG handling."
+      expert: "Use Cutadapt only when exact adapter grammar or older-study reproducibility is required."

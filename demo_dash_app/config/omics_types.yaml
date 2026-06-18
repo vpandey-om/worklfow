@@ -1,0 +1,33 @@
+omics_types:
+  bulk_rnaseq:
+    label: Bulk RNA-seq
+    enabled: true
+    default_workflow: qc_trim
+    upload_categories:
+      - fastq
+      - metadata
+    workflows:
+      - fastq_qc
+      - trim_only
+      - qc_trim
+    message: Bulk RNA-seq preprocessing is currently active for testing.
+
+  genomics:
+    label: Genomics
+    enabled: false
+    message: Genomics workflows are under development.
+
+  scrnaseq:
+    label: Single-cell RNA-seq
+    enabled: false
+    message: scRNA-seq workflows are under development.
+
+  proteomics:
+    label: Proteomics
+    enabled: false
+    message: Proteomics workflows are under development.
+
+  metabolomics:
+    label: Metabolomics
+    enabled: false
+    message: Metabolomics workflows are under development.

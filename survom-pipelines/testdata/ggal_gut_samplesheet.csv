@@ -1,0 +1,2 @@
+sample_id,fastq_1,fastq_2,library_layout,condition,organism
+ggal_gut,testdata/data/ggal/ggal_gut_1.fq,testdata/data/ggal/ggal_gut_2.fq,paired,gut,Gallus_gallus

@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SurvOm samplesheet",
+  "type": "object",
+  "required": ["sample_id", "library_layout", "fastq_1"],
+  "properties": {
+    "sample_id": {"type": "string"},
+    "library_layout": {"enum": ["single", "paired"]},
+    "fastq_1": {"type": "string"},
+    "fastq_2": {"type": ["string", "null"]},
+    "platform": {"type": ["string", "null"]}
+  }
+}

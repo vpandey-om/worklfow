@@ -1,0 +1,81 @@
+# Python caches and local environments
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+.venv/
+venv/
+env/
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Local secrets and machine-specific config
+.env
+.env.*
+*.local
+
+# Dash app runtime data
+demo_dash_app/uploads/
+demo_dash_app/runs/
+demo_dash_app/*.sqlite
+demo_dash_app/**/*.sqlite
+
+# Nextflow runtime data
+survom-pipelines/work/
+survom-pipelines/.nextflow/
+survom-pipelines/.nextflow.log*
+survom-pipelines/workflows/generated/
+survom-pipelines/jobs/
+survom-pipelines/results/
+
+# Logs and transient reports
+*.log
+*.out
+*.err
+*.trace
+trace.txt
+timeline.html
+report.html
+dag.dot
+
+# Large omics data and generated analysis outputs
+*.fastq
+*.fastq.gz
+*.fq
+*.fq.gz
+*.bam
+*.bai
+*.sam
+*.cram
+*.crai
+*.vcf
+*.vcf.gz
+*.bcf
+*.h5ad
+*.loom
+*.mzML
+*.mzXML
+*.raw
+*.fasta.gz
+*.fa.gz
+*.gtf.gz
+*.gff.gz
+
+# Compressed archives and binary bundles
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.7z
+*.rar
+
+# Keep source docs/config/templates trackable; runtime results should stay ignored above.

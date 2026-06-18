@@ -1,0 +1,14 @@
+run_id: ggal_trim_only_test
+omics: rnaseq
+execution_profile: local
+input: testdata/ggal_gut_samplesheet.csv
+outdir: results/ggal_trim_only_test
+selected_steps:
+  - rnaseq_04_adapter_quality_trimming
+params:
+  trimming_tool: fastp
+  quality_threshold: 20
+  minimum_read_length: 20
+  trim_poly_g: auto
+  trim_poly_x: false
+  threads: 4

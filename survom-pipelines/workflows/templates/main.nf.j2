@@ -1,0 +1,49 @@
+nextflow.enable.dsl = 2
+
+{% for step in steps %}
+{% if step.step_id == 'rnaseq_04_adapter_quality_trimming' and params.get('trimming_tool') == 'cutadapt' %}
+include { CUTADAPT } from '../../../modules/common/cutadapt/main'
+{% elif step.step_id == 'rnaseq_04_adapter_quality_trimming' %}
+include { FASTP } from '../../../modules/common/fastp/main'
+{% else %}
+include { {{ step.process_name }} } from '../../../{{ step.module_path | replace('/main.nf', '/main') }}'
+{% endif %}
+{% endfor %}
+{% if 'rnaseq_04_adapter_quality_trimming' in request.selected_steps %}
+include { MAKE_PREPROCESS_MANIFEST; MERGE_PREPROCESS_MANIFEST } from '../../../modules/common/make_preprocess_manifest/main'
+{% endif %}
+
+workflow {
+    Channel
+        .fromPath(params.input)
+        .splitCsv(header: true)
+        .map { row ->
+            def meta = [
+                id: row.sample_id,
+                single_end: row.library_layout == 'single',
+                platform: row.platform ?: 'unknown'
+            ]
+            def reads = meta.single_end ? [ file(row.fastq_1) ] : [ file(row.fastq_1), file(row.fastq_2) ]
+            tuple(meta, reads)
+        }
+        .set { ch_reads }
+
+{% for step in steps %}
+{% if step.step_id == 'rnaseq_03_raw_read_qc' %}
+    {{ step.process_name }}(ch_reads)
+{% elif step.step_id == 'rnaseq_04_adapter_quality_trimming' %}
+{% if params.get('trimming_tool') == 'cutadapt' %}
+    CUTADAPT(ch_reads)
+    MAKE_PREPROCESS_MANIFEST(CUTADAPT.out.reads)
+{% else %}
+    FASTP(ch_reads)
+    MAKE_PREPROCESS_MANIFEST(FASTP.out.reads)
+{% endif %}
+    MERGE_PREPROCESS_MANIFEST(MAKE_PREPROCESS_MANIFEST.out.fragments.collect())
+{% else %}
+    // TODO: wire {{ step.step_id }} using registry input/output contracts
+    {{ step.process_name }}(ch_previous)
+{% endif %}
+
+{% endfor %}
+}

@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SurvOm run request",
+  "type": "object",
+  "required": ["run_id", "omics", "execution_profile", "input", "outdir", "selected_steps"],
+  "properties": {
+    "run_id": {"type": "string"},
+    "omics": {"type": "string"},
+    "execution_profile": {"type": "string"},
+    "input": {"type": "string"},
+    "outdir": {"type": "string"},
+    "selected_steps": {"type": "array", "items": {"type": "string"}},
+    "params": {"type": "object"}
+  }
+}

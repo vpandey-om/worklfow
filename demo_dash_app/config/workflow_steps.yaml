@@ -1,0 +1,220 @@
+steps:
+  - id: fastq_qc
+    name: Raw FASTQ QC
+    label: Raw FASTQ QC
+    omics_type: bulk_rnaseq
+    enabled: true
+    description: Run FastQC on uploaded FASTQ files using the existing SurvOm modular workflow.
+    selected_steps:
+      - rnaseq_03_raw_read_qc
+    params:
+      threads:
+        type: int
+        default: 4
+      qc_tool:
+        type: string
+        default: fastqc
+
+  - id: trim_only
+    name: Adapter and Quality Trimming
+    label: Adapter/quality trimming
+    omics_type: bulk_rnaseq
+    enabled: true
+    description: Run fastp trimming only, using uploaded FASTQ files as input.
+    selected_steps:
+      - rnaseq_04_adapter_quality_trimming
+    params:
+      quality_threshold:
+        type: enum
+        default: 20
+        allowed: [15, 20, 25, 30]
+        labels:
+          15: Q15
+          20: Q20 recommended
+          25: Q25
+          30: Q30
+        min: 5
+        max: 35
+        ui_label: Minimum base quality
+        help: Q20 is a common RNA-seq default.
+      minimum_read_length:
+        type: enum
+        default: 20
+        allowed: [20, 25, 30, 50]
+        labels:
+          20: 20 bp recommended
+          25: 25 bp
+          30: 30 bp
+          50: 50 bp
+        min: 10
+        max: 100
+        ui_label: Minimum read length after trimming
+        help: Reads shorter than this after trimming are discarded.
+      trim_poly_g:
+        type: enum
+        default: auto
+        allowed: [auto, true, false]
+        labels:
+          auto: Auto recommended
+          true: On
+          false: Off
+        ui_label: Trim polyG tails
+        help: Auto is recommended for NextSeq/NovaSeq two-color data.
+    advanced_params:
+      trimming_tool:
+        type: enum
+        default: fastp
+        allowed: [fastp, cutadapt]
+        labels:
+          fastp: fastp recommended
+          cutadapt: Cutadapt advanced
+        ui_label: Trimming tool
+        help: Use fastp by default. Use Cutadapt only for exact adapter handling.
+      trim_poly_x:
+        type: enum
+        default: false
+        allowed: [false, true]
+        labels:
+          false: Off recommended
+          true: On
+        ui_label: Trim polyX tails
+      adapter_sequence_r1:
+        type: string
+        default:
+        ui_label: R1 adapter sequence
+      adapter_sequence_r2:
+        type: string
+        default:
+        ui_label: R2 adapter sequence
+      adapter_fasta:
+        type: string
+        default:
+        ui_label: Adapter FASTA file
+      trim_front_r1:
+        type: int
+        default: 0
+        min: 0
+        max: 50
+        ui_label: Fixed 5 prime trim from R1
+      trim_front_r2:
+        type: int
+        default: 0
+        min: 0
+        max: 50
+        ui_label: Fixed 5 prime trim from R2
+      cutadapt_error_rate:
+        type: number
+        default: 0.1
+        min: 0
+        max: 0.3
+        ui_label: Cutadapt adapter error rate
+      cutadapt_minimum_overlap:
+        type: int
+        default: 3
+        min: 1
+        max: 20
+        ui_label: Cutadapt minimum adapter overlap
+
+  - id: qc_trim
+    name: Raw QC + trimming
+    label: Raw QC + trimming
+    omics_type: bulk_rnaseq
+    enabled: true
+    description: Run raw FastQC and fastp trimming as a two-step demo workflow.
+    selected_steps:
+      - rnaseq_03_raw_read_qc
+      - rnaseq_04_adapter_quality_trimming
+    params:
+      qc_tool:
+        type: string
+        default: fastqc
+      quality_threshold:
+        type: enum
+        default: 20
+        allowed: [15, 20, 25, 30]
+        labels:
+          15: Q15
+          20: Q20 recommended
+          25: Q25
+          30: Q30
+        min: 5
+        max: 35
+        ui_label: Minimum base quality
+        help: Q20 is a common RNA-seq default.
+      minimum_read_length:
+        type: enum
+        default: 20
+        allowed: [20, 25, 30, 50]
+        labels:
+          20: 20 bp recommended
+          25: 25 bp
+          30: 30 bp
+          50: 50 bp
+        min: 10
+        max: 100
+        ui_label: Minimum read length after trimming
+        help: Reads shorter than this after trimming are discarded.
+      trim_poly_g:
+        type: enum
+        default: auto
+        allowed: [auto, true, false]
+        labels:
+          auto: Auto recommended
+          true: On
+          false: Off
+        ui_label: Trim polyG tails
+        help: Auto is recommended for NextSeq/NovaSeq two-color data.
+    advanced_params:
+      trimming_tool:
+        type: enum
+        default: fastp
+        allowed: [fastp, cutadapt]
+        labels:
+          fastp: fastp recommended
+          cutadapt: Cutadapt advanced
+        ui_label: Trimming tool
+        help: Use fastp by default. Use Cutadapt only for exact adapter handling.
+      trim_poly_x:
+        type: enum
+        default: false
+        allowed: [false, true]
+        labels:
+          false: Off recommended
+          true: On
+        ui_label: Trim polyX tails
+      adapter_sequence_r1:
+        type: string
+        default:
+        ui_label: R1 adapter sequence
+      adapter_sequence_r2:
+        type: string
+        default:
+        ui_label: R2 adapter sequence
+      adapter_fasta:
+        type: string
+        default:
+        ui_label: Adapter FASTA file
+      trim_front_r1:
+        type: int
+        default: 0
+        min: 0
+        max: 50
+        ui_label: Fixed 5 prime trim from R1
+      trim_front_r2:
+        type: int
+        default: 0
+        min: 0
+        max: 50
+        ui_label: Fixed 5 prime trim from R2
+      cutadapt_error_rate:
+        type: number
+        default: 0.1
+        min: 0
+        max: 0.3
+        ui_label: Cutadapt adapter error rate
+      cutadapt_minimum_overlap:
+        type: int
+        default: 3
+        min: 1
+        max: 20
+        ui_label: Cutadapt minimum adapter overlap

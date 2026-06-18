@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SurvOm step registry",
+  "type": "object",
+  "required": ["version", "steps"],
+  "properties": {
+    "version": {"type": "string"},
+    "steps": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["step_id", "step_name", "omics", "module_path", "process_name", "parameters", "outputs"],
+        "properties": {
+          "step_id": {"type": "string"},
+          "step_name": {"type": "string"},
+          "omics": {"type": "array", "items": {"type": "string"}},
+          "module_path": {"type": "string"},
+          "process_name": {"type": "string"}
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,21 @@
+name: survom-preprocess
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python
+  - fastqc=0.12.1
+  - fastp
+  - cutadapt=5.1
+  - pydantic
+  - pyyaml
+  - jinja2
+  - pip
+  - pip:
+      - dash
+      - dash-bootstrap-components
+      - flask
+      - gunicorn
+      - pandas
+      - openpyxl
+      - werkzeug

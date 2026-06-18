@@ -1,0 +1,8 @@
+dash
+dash-bootstrap-components
+flask
+gunicorn
+pyyaml
+pandas
+openpyxl
+werkzeug

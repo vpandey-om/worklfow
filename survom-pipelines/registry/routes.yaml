@@ -1,0 +1,8 @@
+version: "1.0"
+routes:
+  rnaseq_preprocess:
+    omics: rnaseq
+    recommended_steps:
+      - rnaseq_03_raw_read_qc
+      - rnaseq_04_adapter_quality_trimming
+    description: Initial RNA-seq FASTQ QC and adapter/quality trimming route.

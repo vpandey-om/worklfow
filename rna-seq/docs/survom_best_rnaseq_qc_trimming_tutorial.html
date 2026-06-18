@@ -1,0 +1,654 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>SurvOm RNA-seq Tutorial — Raw QC + Trimming Modules</title>
+<style>
+:root{
+  --bg:#fbfaf7;--paper:#ffffff;--ink:#1d1b17;--muted:#655f55;--faint:#8d8578;--line:#e2ddd4;
+  --brand:#24573a;--brand2:#e8f4ec;--blue:#174a7c;--blue2:#eaf2fb;--amber:#87520b;--amber2:#fff4dd;
+  --red:#8a2c2c;--red2:#fdecec;--purple:#4a3d8f;--purple2:#efedff;--gray2:#f2efe9;
+  --radius:14px;--radius2:9px;--shadow:0 12px 30px rgba(43,38,29,.08);--mono:"SFMono-Regular",Consolas,"Liberation Mono",Menlo,monospace;
+}
+*{box-sizing:border-box} html{scroll-behavior:smooth} body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Inter,Arial,sans-serif;line-height:1.55;font-size:15px}
+.layout{display:grid;grid-template-columns:285px minmax(0,1fr);gap:28px;max-width:1320px;margin:0 auto;padding:28px 28px 80px}
+.sidebar{position:sticky;top:0;height:100vh;overflow:auto;padding:22px 16px 30px;border-right:1px solid var(--line)}
+.brand{font-weight:750;font-size:18px;letter-spacing:-.02em;margin-bottom:6px}.side-sub{font-size:12px;color:var(--muted);margin-bottom:18px}.side-badge{display:inline-block;font-size:11px;border-radius:99px;background:var(--brand2);color:var(--brand);padding:3px 8px;margin:0 5px 6px 0;font-weight:650}
+.nav-title{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--faint);font-weight:750;margin:18px 0 7px}.nav a{display:block;text-decoration:none;color:var(--muted);font-size:13px;padding:6px 8px;border-radius:8px}.nav a:hover{background:var(--gray2);color:var(--ink)}
+.main{min-width:0}.hero{background:linear-gradient(135deg,#fff,#f1f8f3);border:1px solid var(--line);border-radius:22px;padding:34px 36px;margin-bottom:24px;box-shadow:var(--shadow)}
+h1{font-size:34px;line-height:1.1;letter-spacing:-.045em;margin:0 0 12px}.lead{font-size:17px;color:var(--muted);max-width:880px;margin:0 0 18px}.meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:18px}.pill{display:inline-flex;align-items:center;gap:6px;border-radius:99px;padding:5px 10px;font-size:12px;font-weight:700;border:1px solid transparent}.green{background:var(--brand2);color:var(--brand)}.blue{background:var(--blue2);color:var(--blue)}.amber{background:var(--amber2);color:var(--amber)}.purple{background:var(--purple2);color:var(--purple)}.red{background:var(--red2);color:var(--red)}.gray{background:var(--gray2);color:var(--muted)}
+section{background:var(--paper);border:1px solid var(--line);border-radius:var(--radius);padding:26px;margin:22px 0;box-shadow:0 4px 16px rgba(43,38,29,.04)}
+h2{font-size:25px;letter-spacing:-.03em;margin:0 0 12px}h3{font-size:18px;letter-spacing:-.01em;margin:28px 0 10px}h4{font-size:13px;text-transform:uppercase;letter-spacing:.08em;color:var(--faint);margin:20px 0 8px}p{color:var(--muted);margin:0 0 12px}a{color:var(--blue)}
+.grid{display:grid;gap:14px}.grid.two{grid-template-columns:repeat(2,minmax(0,1fr))}.grid.three{grid-template-columns:repeat(3,minmax(0,1fr))}.grid.four{grid-template-columns:repeat(4,minmax(0,1fr))}
+.card{border:1px solid var(--line);background:#fff;border-radius:var(--radius2);padding:16px}.card h3,.card h4{margin-top:0}.mini{font-size:13px;color:var(--muted)}.kpi{font-size:24px;font-weight:800;letter-spacing:-.04em;margin-bottom:2px}.mono{font-family:var(--mono)}
+.flow{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:18px 0}.node{border:1px solid var(--line);background:var(--gray2);border-radius:12px;padding:11px 13px;text-align:center;min-width:125px}.node strong{display:block;font-size:13px}.node span{font-size:11px;color:var(--faint)}.arrow{color:var(--faint);font-weight:800}.node.active{background:var(--blue2);border-color:#b8d5ef;color:var(--blue)}.node.trim{background:var(--brand2);border-color:#bddcc8;color:var(--brand)}
+table{width:100%;border-collapse:collapse;margin:12px 0 18px;font-size:13px;overflow:hidden}th{background:var(--gray2);text-align:left;color:var(--muted);font-size:11px;letter-spacing:.06em;text-transform:uppercase;padding:9px 10px;border:1px solid var(--line)}td{padding:10px;border:1px solid var(--line);vertical-align:top}.param{font-family:var(--mono);font-weight:700;white-space:nowrap}.flag{font-family:var(--mono);font-size:12px;color:var(--blue);white-space:nowrap}.default{font-family:var(--mono);font-size:12px;color:var(--brand)}.tag{display:inline-block;border-radius:999px;padding:2px 8px;font-size:11px;font-weight:750}.tag.user{background:var(--brand2);color:var(--brand)}.tag.expert{background:var(--amber2);color:var(--amber)}.tag.internal{background:var(--gray2);color:var(--muted)}
+.note{border-left:4px solid var(--blue);background:var(--blue2);color:var(--blue);padding:12px 14px;border-radius:0 10px 10px 0;margin:14px 0;font-size:14px}.note strong{color:inherit}.note.warn{border-color:var(--amber);background:var(--amber2);color:var(--amber)}.note.good{border-color:var(--brand);background:var(--brand2);color:var(--brand)}.note.danger{border-color:var(--red);background:var(--red2);color:var(--red)}
+.code-wrap{margin:12px 0 18px;border:1px solid #2a2a2a;border-radius:12px;overflow:hidden;background:#111}.code-head{display:flex;justify-content:space-between;align-items:center;background:#1e1e1e;color:#d6d6d6;padding:8px 12px;font-size:12px}.copy{border:1px solid #555;background:#2b2b2b;color:#eee;border-radius:7px;padding:4px 8px;font-size:11px;cursor:pointer}.copy:hover{background:#3a3a3a}pre{margin:0;padding:15px 16px;overflow:auto;background:#111;color:#e7e7e7;font-family:var(--mono);font-size:12.5px;line-height:1.55}.code-comment{color:#8fbc8f}.code-dim{color:#aaa}.code-var{color:#9cdcfe}.code-str{color:#ce9178}
+.checklist{display:grid;gap:8px;margin:12px 0}.check{display:flex;gap:9px;align-items:flex-start;color:var(--muted);font-size:14px}.check::before{content:"✓";font-weight:900;color:var(--brand);margin-top:1px}.x::before{content:"×";color:var(--red)}.warnmark::before{content:"!";color:var(--amber)}
+.output-tree{font-family:var(--mono);font-size:12.5px;background:#faf9f6;border:1px solid var(--line);border-radius:10px;padding:13px;white-space:pre;overflow:auto}.footer{font-size:12px;color:var(--faint);padding:18px 0 0}.print-tip{display:none}
+@media(max-width:980px){.layout{display:block;padding:16px}.sidebar{position:relative;height:auto;border-right:0;border-bottom:1px solid var(--line);margin-bottom:18px}.grid.two,.grid.three,.grid.four{grid-template-columns:1fr}.hero{padding:24px}h1{font-size:28px}section{padding:18px}.nav{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media print{.sidebar,.copy{display:none}.layout{display:block;max-width:none;padding:0}.hero,section{box-shadow:none;page-break-inside:avoid}.print-tip{display:block}}
+</style>
+</head>
+<body>
+<div class="layout">
+<aside class="sidebar">
+  <div class="brand">SurvOm RNA-seq</div>
+  <div class="side-sub">Production tutorial for Modules 03 & 04</div>
+  <span class="side-badge">FastQC/Falco</span><span class="side-badge">fastp/Cutadapt</span><span class="side-badge">Local + AWS</span>
+  <div class="nav">
+    <div class="nav-title">Start</div>
+    <a href="#overview">Overview</a>
+    <a href="#contract">Module contract</a>
+    <a href="#samplesheet">Input sample sheet</a>
+    <div class="nav-title">Modules</div>
+    <a href="#module03">03 Raw Read QC</a>
+    <a href="#module04">04 Adapter + Quality Trimming</a>
+    <a href="#combined">Combined workflow</a>
+    <div class="nav-title">Execution</div>
+    <a href="#commands">Commands</a>
+    <a href="#nextflow">Nextflow implementation</a>
+    <a href="#aws">AWS Batch profile</a>
+    <a href="#install">Installation</a>
+    <div class="nav-title">Product</div>
+    <a href="#ui">UI / chat exposure</a>
+    <a href="#outputs">Output contracts</a>
+    <a href="#qc-rules">QC rules</a>
+    <a href="#refs">References</a>
+  </div>
+</aside>
+<main class="main">
+<header class="hero" id="overview">
+  <h1>RNA-seq preprocessing tutorial: Raw QC + Adapter/Quality Trimming</h1>
+  <p class="lead">A module-wise, production-ready tutorial for SurvOm. Users can run <strong>Raw Read QC</strong> and <strong>Adapter/Quality Trimming</strong> separately, or run them as one guided workflow on local infrastructure, Docker, HPC, or AWS Batch.</p>
+  <div class="meta">
+    <span class="pill green">COMMON module — reusable across omics</span>
+    <span class="pill blue">Nextflow DSL2 ready</span>
+    <span class="pill amber">Guided UI + Chat workflow</span>
+    <span class="pill purple">Validated command flags</span>
+    <span class="pill gray">Generated 2026-06-18</span>
+  </div>
+</header>
+
+<section id="contract">
+  <h2>Design decision</h2>
+  <p>The best product design is <strong>two atomic modules plus one wrapper flow</strong>. This keeps each module testable and reusable, while giving beginner users a single guided “preprocess my FASTQs” experience.</p>
+  <div class="flow">
+    <div class="node"><strong>Input</strong><span>sample sheet + FASTQ</span></div><div class="arrow">→</div>
+    <div class="node active"><strong>03 Raw QC</strong><span>FastQC / Falco</span></div><div class="arrow">→</div>
+    <div class="node trim"><strong>04 Trimming</strong><span>fastp / Cutadapt</span></div><div class="arrow">→</div>
+    <div class="node"><strong>Optional 05</strong><span>post-trim QC</span></div><div class="arrow">→</div>
+    <div class="node"><strong>Downstream</strong><span>Salmon or STAR</span></div>
+  </div>
+  <div class="grid three">
+    <div class="card"><div class="kpi">1 default</div><p>Expose one recommended tool per module to reduce support and validation complexity.</p></div>
+    <div class="card"><div class="kpi">1 fallback</div><p>Keep one special-case tool for speed, exact adapters, or reproducibility needs.</p></div>
+    <div class="card"><div class="kpi">3 tiers</div><p>Separate <span class="tag user">user</span>, <span class="tag expert">expert</span>, and <span class="tag internal">internal</span> parameters.</p></div>
+  </div>
+  <table>
+    <thead><tr><th>Module</th><th>Default</th><th>Fallback</th><th>User purpose</th><th>Product purpose</th></tr></thead>
+    <tbody>
+      <tr><td class="param">rnaseq_03_raw_read_qc</td><td>FastQC</td><td>Falco</td><td>“Check my raw reads.”</td><td>Generate HTML/ZIP QC artifacts and machine-readable summary.</td></tr>
+      <tr><td class="param">rnaseq_04_adapter_quality_trimming</td><td>fastp</td><td>Cutadapt</td><td>“Clean adapters and poor-quality tails.”</td><td>Generate trimmed FASTQ plus JSON/HTML trimming evidence.</td></tr>
+      <tr><td class="param">rnaseq_preprocess_qc_trim</td><td>Wrapper flow</td><td>—</td><td>“Run preprocessing.”</td><td>Chain module 03 + 04 + optional post-trim QC with a single run ID.</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section id="samplesheet">
+  <h2>Input model</h2>
+  <p>Use one sample sheet everywhere: local, S3, UI upload, API, and chat-generated workflow. The file paths can be local paths or cloud object paths.</p>
+  <div class="grid two">
+    <div>
+      <h3>Minimum paired-end sample sheet</h3>
+      <div class="code-wrap"><div class="code-head">samplesheet.csv<button class="copy">Copy</button></div><pre><code>sample_id,fastq_1,fastq_2,library_layout,platform
+S1,data/S1_R1.fastq.gz,data/S1_R2.fastq.gz,paired,novaseq
+S2,data/S2_R1.fastq.gz,data/S2_R2.fastq.gz,paired,novaseq</code></pre></div>
+    </div>
+    <div>
+      <h3>AWS/S3 version</h3>
+      <div class="code-wrap"><div class="code-head">samplesheet.s3.csv<button class="copy">Copy</button></div><pre><code>sample_id,fastq_1,fastq_2,library_layout,platform
+S1,s3://survom-demo/fastq/S1_R1.fastq.gz,s3://survom-demo/fastq/S1_R2.fastq.gz,paired,novaseq
+S2,s3://survom-demo/fastq/S2_R1.fastq.gz,s3://survom-demo/fastq/S2_R2.fastq.gz,paired,novaseq</code></pre></div>
+    </div>
+  </div>
+  <h3>Recommended schema</h3>
+  <table>
+    <thead><tr><th>Column</th><th>Required</th><th>Description</th><th>Validation rule</th></tr></thead>
+    <tbody>
+      <tr><td class="param">sample_id</td><td>Yes</td><td>Stable sample name used in outputs.</td><td>Unique; no spaces; safe characters only.</td></tr>
+      <tr><td class="param">fastq_1</td><td>Yes</td><td>R1 FASTQ path.</td><td>Must exist / be readable; .fq, .fastq, .fq.gz, .fastq.gz.</td></tr>
+      <tr><td class="param">fastq_2</td><td>Paired only</td><td>R2 FASTQ path.</td><td>Required when <span class="param">library_layout=paired</span>.</td></tr>
+      <tr><td class="param">library_layout</td><td>Yes</td><td>single or paired.</td><td>Enum: <span class="param">single</span>, <span class="param">paired</span>.</td></tr>
+      <tr><td class="param">platform</td><td>No</td><td>Sequencer/instrument family.</td><td>Use to auto-set polyG trimming: novaseq/nextseq ⇒ on.</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section id="module03">
+  <h2>Module 03 — Raw Read Quality Control</h2>
+  <p>This module runs before reads are changed. It gives users confidence in the starting data and gives the platform evidence for whether trimming is recommended.</p>
+  <div class="grid two">
+    <div class="card">
+      <h3>Inputs</h3>
+      <div class="checklist">
+        <div class="check"><span class="param">staged_fastq_manifest</span> from step 02</div>
+        <div class="check"><span class="param">fastq_1</span> for each sample</div>
+        <div class="check"><span class="param">fastq_2</span> for paired-end samples</div>
+        <div class="check warnmark">Optional custom adapter / contaminant files for expert mode</div>
+      </div>
+    </div>
+    <div class="card">
+      <h3>Outputs</h3>
+      <div class="checklist">
+        <div class="check"><span class="param">*_fastqc.html</span> visual report</div>
+        <div class="check"><span class="param">*_fastqc.zip</span> machine-readable FastQC archive</div>
+        <div class="check"><span class="param">raw_qc_summary.json</span> for UI/chat</div>
+        <div class="check"><span class="param">raw_qc_status.tsv</span> for tables and exports</div>
+      </div>
+    </div>
+  </div>
+  <h3>Tool choice</h3>
+  <table>
+    <thead><tr><th>Role</th><th>Tool</th><th>Use when</th><th>Why</th></tr></thead>
+    <tbody>
+      <tr><td><span class="tag user">Default</span></td><td><strong>FastQC</strong></td><td>Standard bulk RNA-seq and most guided workflows.</td><td>Mature, familiar, stable output, strong MultiQC support.</td></tr>
+      <tr><td><span class="tag expert">Fallback</span></td><td><strong>Falco</strong></td><td>Large cohorts where QC runtime becomes a bottleneck.</td><td>FastQC-compatible output with faster execution in many datasets.</td></tr>
+    </tbody>
+  </table>
+  <h3>FastQC parameters</h3>
+  <table>
+    <thead><tr><th>Parameter</th><th>CLI flag</th><th>Default</th><th>Expose?</th><th>User meaning</th></tr></thead>
+    <tbody>
+      <tr><td class="param">run_raw_qc</td><td class="flag">workflow switch</td><td class="default">true</td><td><span class="tag user">user</span></td><td>Whether to run this module.</td></tr>
+      <tr><td class="param">threads</td><td class="flag">--threads</td><td class="default">auto / 4</td><td><span class="tag internal">internal</span></td><td>CPU threads; platform sets by profile.</td></tr>
+      <tr><td class="param">outdir</td><td class="flag">--outdir</td><td class="default">03_raw_qc/</td><td><span class="tag internal">internal</span></td><td>Published by the workflow layout.</td></tr>
+      <tr><td class="param">custom_adapters</td><td class="flag">--adapters</td><td class="default">null</td><td><span class="tag expert">expert</span></td><td>Adapter list file for special protocols.</td></tr>
+      <tr><td class="param">custom_contaminants</td><td class="flag">--contaminants</td><td class="default">null</td><td><span class="tag expert">expert</span></td><td>Known contaminants file for overrepresented sequence checks.</td></tr>
+      <tr><td class="param">extract_zip</td><td class="flag">--extract</td><td class="default">true</td><td><span class="tag internal">internal</span></td><td>Keep true so downstream parsers can read extracted files.</td></tr>
+      <tr><td class="param">fail_on_fastqc_warn</td><td class="flag">platform rule</td><td class="default">false</td><td><span class="tag internal">internal</span></td><td>Do not hard-fail on biological QC warnings.</td></tr>
+    </tbody>
+  </table>
+  <div class="note warn"><strong>Product rule:</strong> Do not fail a workflow only because a FastQC module reports WARN/FAIL. Use those flags to explain data quality and recommend trimming or post-trim review.</div>
+  <h3>Local command</h3>
+  <div class="code-wrap"><div class="code-head">FastQC paired-end sample<button class="copy">Copy</button></div><pre><code>mkdir -p results/03_raw_qc/fastqc
+
+fastqc \
+  --threads 4 \
+  --outdir results/03_raw_qc/fastqc \
+  --extract \
+  data/S1_R1.fastq.gz \
+  data/S1_R2.fastq.gz</code></pre></div>
+  <h3>Fallback command</h3>
+  <div class="code-wrap"><div class="code-head">Falco paired-end sample<button class="copy">Copy</button></div><pre><code>mkdir -p results/03_raw_qc/falco
+
+falco \
+  --outdir results/03_raw_qc/falco \
+  data/S1_R1.fastq.gz \
+  data/S1_R2.fastq.gz</code></pre></div>
+</section>
+
+<section id="module04">
+  <h2>Module 04 — Adapter and Quality Trimming</h2>
+  <p>This module removes adapters, poor-quality read tails, and platform-specific artifacts such as polyG tails. It is optional, but in a guided RNA-seq workflow it should usually run unless raw QC is clean and an expert chooses to skip it.</p>
+  <div class="grid two">
+    <div class="card">
+      <h3>Inputs</h3>
+      <div class="checklist">
+        <div class="check"><span class="param">staged_fastq_manifest</span> or raw FASTQ paths</div>
+        <div class="check"><span class="param">raw_qc_summary.json</span> to guide trimming recommendation</div>
+        <div class="check warnmark">Optional explicit adapter sequences</div>
+        <div class="check warnmark">Optional platform metadata for polyG trimming</div>
+      </div>
+    </div>
+    <div class="card">
+      <h3>Outputs</h3>
+      <div class="checklist">
+        <div class="check"><span class="param">*.trimmed.fastq.gz</span> cleaned reads</div>
+        <div class="check"><span class="param">trimmed_fastq_manifest</span> for downstream steps</div>
+        <div class="check"><span class="param">*.fastp.html</span> visual trimming report</div>
+        <div class="check"><span class="param">*.fastp.json</span> machine-readable metrics</div>
+      </div>
+    </div>
+  </div>
+  <h3>Tool choice</h3>
+  <table>
+    <thead><tr><th>Role</th><th>Tool</th><th>Use when</th><th>Why</th></tr></thead>
+    <tbody>
+      <tr><td><span class="tag user">Default</span></td><td><strong>fastp</strong></td><td>Standard guided preprocessing.</td><td>Adapter detection, quality filtering, polyG/polyX trimming, JSON and HTML reports in one tool.</td></tr>
+      <tr><td><span class="tag expert">Fallback</span></td><td><strong>Cutadapt</strong></td><td>Exact custom adapters or reproduction of older studies.</td><td>Precise adapter grammar: 3′, 5′, linked, anchored, paired adapter handling.</td></tr>
+    </tbody>
+  </table>
+  <h3>fastp parameters</h3>
+  <table>
+    <thead><tr><th>Parameter</th><th>CLI flag</th><th>Recommended default</th><th>Expose?</th><th>Explanation</th></tr></thead>
+    <tbody>
+      <tr><td class="param">run_trimming</td><td class="flag">workflow switch</td><td class="default">true</td><td><span class="tag user">user</span></td><td>Run or skip trimming.</td></tr>
+      <tr><td class="param">quality_threshold</td><td class="flag">--qualified_quality_phred</td><td class="default">20</td><td><span class="tag user">user</span></td><td>Base quality threshold. Q20 is a good guided default.</td></tr>
+      <tr><td class="param">minimum_read_length</td><td class="flag">--length_required</td><td class="default">20</td><td><span class="tag user">user</span></td><td>Discard reads shorter than this after trimming.</td></tr>
+      <tr><td class="param">trim_poly_g</td><td class="flag">--trim_poly_g</td><td class="default">auto</td><td><span class="tag user">user</span></td><td>Important for NovaSeq/NextSeq two-color chemistry.</td></tr>
+      <tr><td class="param">trim_poly_x</td><td class="flag">--trim_poly_x</td><td class="default">false</td><td><span class="tag user">user</span></td><td>Use for homopolymer tails when supported by protocol/QC.</td></tr>
+      <tr><td class="param">adapter_sequence_r1</td><td class="flag">--adapter_sequence</td><td class="default">auto</td><td><span class="tag expert">expert</span></td><td>Explicit R1 adapter. Hides auto-detection.</td></tr>
+      <tr><td class="param">adapter_sequence_r2</td><td class="flag">--adapter_sequence_r2</td><td class="default">auto</td><td><span class="tag expert">expert</span></td><td>Explicit R2 adapter for paired-end data.</td></tr>
+      <tr><td class="param">trim_front_r1</td><td class="flag">--trim_front1</td><td class="default">0</td><td><span class="tag expert">expert</span></td><td>Hard-trim fixed bases from 5′ end of R1.</td></tr>
+      <tr><td class="param">trim_front_r2</td><td class="flag">--trim_front2</td><td class="default">0</td><td><span class="tag expert">expert</span></td><td>Hard-trim fixed bases from 5′ end of R2.</td></tr>
+      <tr><td class="param">threads</td><td class="flag">--thread</td><td class="default">auto / 4</td><td><span class="tag internal">internal</span></td><td>Platform controls CPU based on local/AWS profile.</td></tr>
+    </tbody>
+  </table>
+  <h3>Cutadapt fallback parameters</h3>
+  <table>
+    <thead><tr><th>Parameter</th><th>CLI flag</th><th>Default</th><th>Expose?</th><th>Use</th></tr></thead>
+    <tbody>
+      <tr><td class="param">adapter_r1</td><td class="flag">-a</td><td class="default">required</td><td><span class="tag expert">expert</span></td><td>3′ adapter to remove from R1.</td></tr>
+      <tr><td class="param">adapter_r2</td><td class="flag">-A</td><td class="default">required for PE</td><td><span class="tag expert">expert</span></td><td>3′ adapter to remove from R2.</td></tr>
+      <tr><td class="param">quality_threshold</td><td class="flag">-q</td><td class="default">20</td><td><span class="tag user">user</span></td><td>Low-quality end trimming.</td></tr>
+      <tr><td class="param">minimum_read_length</td><td class="flag">-m</td><td class="default">20</td><td><span class="tag user">user</span></td><td>Discard reads shorter than threshold.</td></tr>
+      <tr><td class="param">error_rate</td><td class="flag">-e</td><td class="default">0.1</td><td><span class="tag expert">expert</span></td><td>Adapter match error tolerance.</td></tr>
+      <tr><td class="param">minimum_overlap</td><td class="flag">-O</td><td class="default">3</td><td><span class="tag expert">expert</span></td><td>Minimum overlap between adapter and read.</td></tr>
+      <tr><td class="param">threads</td><td class="flag">-j / --cores</td><td class="default">auto / 4</td><td><span class="tag internal">internal</span></td><td>Platform controls CPU.</td></tr>
+    </tbody>
+  </table>
+  <h3>Local command</h3>
+  <div class="code-wrap"><div class="code-head">fastp paired-end sample<button class="copy">Copy</button></div><pre><code>mkdir -p results/04_trimmed/fastq results/04_trimmed/reports
+
+fastp \
+  --in1 data/S1_R1.fastq.gz \
+  --in2 data/S1_R2.fastq.gz \
+  --out1 results/04_trimmed/fastq/S1_R1.trimmed.fastq.gz \
+  --out2 results/04_trimmed/fastq/S1_R2.trimmed.fastq.gz \
+  --detect_adapter_for_pe \
+  --qualified_quality_phred 20 \
+  --length_required 20 \
+  --trim_poly_g \
+  --thread 4 \
+  --html results/04_trimmed/reports/S1.fastp.html \
+  --json results/04_trimmed/reports/S1.fastp.json</code></pre></div>
+  <h3>Fallback command</h3>
+  <div class="code-wrap"><div class="code-head">Cutadapt paired-end sample<button class="copy">Copy</button></div><pre><code>mkdir -p results/04_trimmed/fastq results/04_trimmed/reports
+
+cutadapt \
+  -j 4 \
+  -a AGATCGGAAGAGCACACGTCTGAACTCCAGTCA \
+  -A AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGT \
+  -q 20 \
+  -m 20 \
+  --json results/04_trimmed/reports/S1.cutadapt.json \
+  -o results/04_trimmed/fastq/S1_R1.trimmed.fastq.gz \
+  -p results/04_trimmed/fastq/S1_R2.trimmed.fastq.gz \
+  data/S1_R1.fastq.gz data/S1_R2.fastq.gz</code></pre></div>
+</section>
+
+<section id="combined">
+  <h2>Combined workflow: one guided preprocessing flow</h2>
+  <p>The UI should show one simple workflow, but internally run atomic modules. This gives beginners a clean experience and gives developers testable reusable components.</p>
+  <table>
+    <thead><tr><th>Mode</th><th>Runs</th><th>Use case</th><th>Command switch</th></tr></thead>
+    <tbody>
+      <tr><td class="param">raw_qc_only</td><td>03 only</td><td>Check FASTQ quality before deciding anything.</td><td class="flag">--workflow_mode raw_qc_only</td></tr>
+      <tr><td class="param">trimming_only</td><td>04 only</td><td>User already ran QC or wants direct trimming.</td><td class="flag">--workflow_mode trimming_only</td></tr>
+      <tr><td class="param">raw_qc_plus_trimming</td><td>03 → 04</td><td>Good production minimum.</td><td class="flag">--workflow_mode raw_qc_plus_trimming</td></tr>
+      <tr><td class="param">full_preprocess_qc</td><td>03 → 04 → 05</td><td>Best guided RNA-seq preprocessing.</td><td class="flag">--workflow_mode full_preprocess_qc</td></tr>
+    </tbody>
+  </table>
+  <div class="code-wrap"><div class="code-head">Best guided workflow command<button class="copy">Copy</button></div><pre><code>nextflow run main.nf \
+  -profile local,docker \
+  --input assets/samplesheet.csv \
+  --outdir results/run001 \
+  --workflow_mode full_preprocess_qc \
+  --qc_tool fastqc \
+  --trimming_tool fastp \
+  --quality_threshold 20 \
+  --minimum_read_length 20 \
+  --trim_poly_g auto \
+  --trim_poly_x false \
+  -resume</code></pre></div>
+</section>
+
+<section id="commands">
+  <h2>Run commands users can copy</h2>
+  <div class="grid two">
+    <div class="card"><h3>Run module 03 only</h3><div class="code-wrap"><div class="code-head">Raw QC only<button class="copy">Copy</button></div><pre><code>nextflow run main.nf \
+  -profile local,docker \
+  --input assets/samplesheet.csv \
+  --outdir results/qc_only \
+  --workflow_mode raw_qc_only \
+  --qc_tool fastqc \
+  -resume</code></pre></div></div>
+    <div class="card"><h3>Run module 04 only</h3><div class="code-wrap"><div class="code-head">Trimming only<button class="copy">Copy</button></div><pre><code>nextflow run main.nf \
+  -profile local,docker \
+  --input assets/samplesheet.csv \
+  --outdir results/trim_only \
+  --workflow_mode trimming_only \
+  --trimming_tool fastp \
+  --quality_threshold 20 \
+  --minimum_read_length 20 \
+  --trim_poly_g auto \
+  -resume</code></pre></div></div>
+  </div>
+  <div class="grid two">
+    <div class="card"><h3>Local Docker</h3><div class="code-wrap"><div class="code-head">Local containerized run<button class="copy">Copy</button></div><pre><code>nextflow run main.nf \
+  -profile local,docker \
+  --input /data/samplesheet.csv \
+  --outdir /data/results/run001 \
+  --workflow_mode full_preprocess_qc \
+  -resume</code></pre></div></div>
+    <div class="card"><h3>AWS Batch</h3><div class="code-wrap"><div class="code-head">Cloud run<button class="copy">Copy</button></div><pre><code>nextflow run main.nf \
+  -profile aws \
+  -work-dir s3://survom-rnaseq/work/run001 \
+  --input s3://survom-rnaseq/input/samplesheet.csv \
+  --outdir s3://survom-rnaseq/results/run001 \
+  --workflow_mode full_preprocess_qc \
+  --quality_threshold 20 \
+  --minimum_read_length 20 \
+  --trim_poly_g auto \
+  -resume</code></pre></div></div>
+  </div>
+</section>
+
+<section id="nextflow">
+  <h2>Nextflow implementation pattern</h2>
+  <p>Keep module code separate from workflow orchestration. The wrapper workflow chooses which modules to run based on <span class="param">workflow_mode</span>.</p>
+  <h3>main.nf skeleton</h3>
+  <div class="code-wrap"><div class="code-head">main.nf<button class="copy">Copy</button></div><pre><code>nextflow.enable.dsl=2
+
+include { FASTQC } from './modules/common/fastqc/main'
+include { FALCO  } from './modules/common/falco/main'
+include { FASTP  } from './modules/common/fastp/main'
+include { CUTADAPT } from './modules/common/cutadapt/main'
+include { MAKE_PREPROCESS_MANIFEST } from './modules/common/make_manifest/main'
+
+workflow {
+    Channel
+        .fromPath(params.input)
+        .splitCsv(header: true)
+        .map { row ->
+            def meta = [ id: row.sample_id, single_end: row.library_layout == 'single', platform: row.platform ?: 'unknown' ]
+            def reads = meta.single_end ? [file(row.fastq_1)] : [file(row.fastq_1), file(row.fastq_2)]
+            tuple(meta, reads)
+        }
+        .set { reads_ch }
+
+    if (params.workflow_mode in ['raw_qc_only','raw_qc_plus_trimming','full_preprocess_qc']) {
+        if (params.qc_tool == 'falco') FALCO(reads_ch)
+        else FASTQC(reads_ch)
+    }
+
+    if (params.workflow_mode in ['trimming_only','raw_qc_plus_trimming','full_preprocess_qc']) {
+        if (params.trimming_tool == 'cutadapt') CUTADAPT(reads_ch)
+        else FASTP(reads_ch)
+    }
+
+    MAKE_PREPROCESS_MANIFEST()
+}</code></pre></div>
+  <h3>nextflow.config parameters</h3>
+  <div class="code-wrap"><div class="code-head">nextflow.config<button class="copy">Copy</button></div><pre><code>params {
+  input = null
+  outdir = 'results'
+  workflow_mode = 'full_preprocess_qc'
+
+  qc_tool = 'fastqc'             // fastqc | falco
+  trimming_tool = 'fastp'        // fastp | cutadapt
+
+  quality_threshold = 20
+  minimum_read_length = 20
+  trim_poly_g = 'auto'           // auto | true | false
+  trim_poly_x = false
+
+  adapter_sequence_r1 = null
+  adapter_sequence_r2 = null
+  custom_adapters_file = null
+  custom_contaminants_file = null
+}
+
+process {
+  withLabel:process_low {
+    cpus = 2
+    memory = '4 GB'
+    time = '2h'
+  }
+  withLabel:process_medium {
+    cpus = 4
+    memory = '8 GB'
+    time = '6h'
+  }
+}
+
+profiles {
+  local {
+    process.executor = 'local'
+  }
+  docker {
+    docker.enabled = true
+  }
+  conda {
+    conda.enabled = true
+  }
+}</code></pre></div>
+</section>
+
+<section id="aws">
+  <h2>AWS Batch profile</h2>
+  <p>On AWS Batch, every process must run in a container and the Nextflow work directory should be in S3. Keep the same workflow parameters; only change the execution profile and paths.</p>
+  <div class="code-wrap"><div class="code-head">conf/aws.config<button class="copy">Copy</button></div><pre><code>profiles {
+  aws {
+    process.executor = 'awsbatch'
+    process.queue = 'survom-rnaseq-queue'
+    aws.region = 'eu-north-1'
+    workDir = 's3://survom-rnaseq/work/'
+
+    docker.enabled = true
+
+    process.withName:FASTQC {
+      container = 'biocontainers/fastqc:v0.12.1_cv4'
+      cpus = 4
+      memory = '8 GB'
+    }
+
+    process.withName:FALCO {
+      container = 'quay.io/biocontainers/falco:1.3.2--h077b44d_0'
+      cpus = 4
+      memory = '4 GB'
+    }
+
+    process.withName:FASTP {
+      container = 'quay.io/biocontainers/fastp:0.23.4--h5f740d0_0'
+      cpus = 4
+      memory = '8 GB'
+    }
+
+    process.withName:CUTADAPT {
+      container = 'quay.io/biocontainers/cutadapt:5.1--py313h1a76870_0'
+      cpus = 4
+      memory = '8 GB'
+    }
+  }
+}</code></pre></div>
+  <div class="note"><strong>Operational tip:</strong> For production AWS, keep FASTQ input and output S3 buckets in the same region as the Batch compute environment to reduce latency and data transfer surprises.</div>
+</section>
+
+<section id="ui">
+  <h2>What to expose in UI/chat</h2>
+  <p>The default guided experience should be simple. Most tool flags are internal. Expert settings should be hidden behind an “Advanced” toggle.</p>
+  <h3>Normal guided UI</h3>
+  <table>
+    <thead><tr><th>Field</th><th>UI label</th><th>Default</th><th>Validation</th><th>Reason</th></tr></thead>
+    <tbody>
+      <tr><td class="param">input</td><td>Sample sheet</td><td class="default">required</td><td>CSV with required columns.</td><td>Entry point for all runs.</td></tr>
+      <tr><td class="param">workflow_mode</td><td>Run mode</td><td class="default">full_preprocess_qc</td><td>Enum.</td><td>Allows one-step or module-only runs.</td></tr>
+      <tr><td class="param">quality_threshold</td><td>Minimum base quality</td><td class="default">20</td><td>5–35.</td><td>Simple but biologically meaningful.</td></tr>
+      <tr><td class="param">minimum_read_length</td><td>Minimum read length after trimming</td><td class="default">20</td><td>10–100.</td><td>Prevents tiny reads from entering mapping/quantification.</td></tr>
+      <tr><td class="param">trim_poly_g</td><td>Trim polyG tails</td><td class="default">auto</td><td>auto/on/off.</td><td>Common for two-color sequencers.</td></tr>
+      <tr><td class="param">execution_profile</td><td>Run location</td><td class="default">local,docker</td><td>local/docker/aws.</td><td>Same workflow can run locally or cloud.</td></tr>
+    </tbody>
+  </table>
+  <h3>Advanced UI</h3>
+  <table>
+    <thead><tr><th>Field</th><th>Default</th><th>When to show</th><th>Warning text</th></tr></thead>
+    <tbody>
+      <tr><td class="param">qc_tool</td><td class="default">fastqc</td><td>Advanced.</td><td>Falco is mainly for large cohorts or speed-sensitive cases.</td></tr>
+      <tr><td class="param">trimming_tool</td><td class="default">fastp</td><td>Advanced.</td><td>Cutadapt requires explicit adapter handling.</td></tr>
+      <tr><td class="param">adapter_sequence_r1/r2</td><td class="default">auto</td><td>Only when trimming_tool = fastp or cutadapt advanced mode.</td><td>Wrong adapters can over-trim data.</td></tr>
+      <tr><td class="param">cutadapt_error_rate</td><td class="default">0.1</td><td>Only when Cutadapt selected.</td><td>Changing this changes adapter matching sensitivity.</td></tr>
+      <tr><td class="param">trim_front_r1/r2</td><td class="default">0</td><td>Advanced protocol-specific cases.</td><td>Hard trimming removes bases from every read.</td></tr>
+    </tbody>
+  </table>
+  <h3>Chat prompt design</h3>
+  <div class="grid two">
+    <div class="card"><h3>Beginner chat</h3><p>“Upload your sample sheet and choose where to run: local or AWS. I will use standard RNA-seq defaults: FastQC, fastp, Q20, minimum length 20, and automatic polyG handling.”</p></div>
+    <div class="card"><h3>Expert chat</h3><p>“Do you need exact adapter sequences, fixed 5′ trimming, or Cutadapt compatibility? Otherwise I recommend fastp with automatic adapter detection.”</p></div>
+  </div>
+</section>
+
+<section id="outputs">
+  <h2>Output directory and machine-readable contracts</h2>
+  <p>Keep output paths predictable. Every module should produce both human-readable and machine-readable artifacts.</p>
+  <div class="output-tree">results/run001/
+├── 03_raw_qc/
+│   ├── fastqc/
+│   │   ├── S1_R1_fastqc.html
+│   │   ├── S1_R1_fastqc.zip
+│   │   ├── S1_R2_fastqc.html
+│   │   └── S1_R2_fastqc.zip
+│   └── raw_qc_summary.json
+├── 04_trimmed/
+│   ├── fastq/
+│   │   ├── S1_R1.trimmed.fastq.gz
+│   │   └── S1_R2.trimmed.fastq.gz
+│   ├── reports/
+│   │   ├── S1.fastp.html
+│   │   └── S1.fastp.json
+│   └── trimmed_fastq_manifest.tsv
+├── 05_post_trim_qc/
+├── multiqc/
+│   └── multiqc_report.html
+└── provenance/
+    ├── run_manifest.json
+    ├── params.resolved.yaml
+    └── software_versions.yml</div>
+  <h3>raw_qc_summary.json</h3>
+  <div class="code-wrap"><div class="code-head">UI/chat QC summary contract<button class="copy">Copy</button></div><pre><code>{
+  "module_id": "rnaseq_03_raw_read_qc",
+  "sample_id": "S1",
+  "tool": "FastQC",
+  "status": "WARN",
+  "metrics": {
+    "per_base_quality_status": "PASS",
+    "adapter_content_status": "WARN",
+    "gc_content_status": "PASS",
+    "duplication_status": "WARN",
+    "overrepresented_sequences_status": "WARN"
+  },
+  "recommendation": "Run adapter and quality trimming before quantification/alignment.",
+  "artifacts": {
+    "html": "03_raw_qc/fastqc/S1_R1_fastqc.html",
+    "zip": "03_raw_qc/fastqc/S1_R1_fastqc.zip"
+  }
+}</code></pre></div>
+  <h3>trimming_summary.json</h3>
+  <div class="code-wrap"><div class="code-head">UI/chat trimming summary contract<button class="copy">Copy</button></div><pre><code>{
+  "module_id": "rnaseq_04_adapter_quality_trimming",
+  "sample_id": "S1",
+  "tool": "fastp",
+  "status": "PASS",
+  "metrics": {
+    "reads_before_filtering": 50200000,
+    "reads_after_filtering": 48750000,
+    "percent_reads_retained": 97.1,
+    "adapter_trimmed_reads_percent": 8.3,
+    "too_short_reads_percent": 0.7,
+    "low_quality_reads_percent": 1.2
+  },
+  "artifacts": {
+    "r1": "04_trimmed/fastq/S1_R1.trimmed.fastq.gz",
+    "r2": "04_trimmed/fastq/S1_R2.trimmed.fastq.gz",
+    "html": "04_trimmed/reports/S1.fastp.html",
+    "json": "04_trimmed/reports/S1.fastp.json"
+  }
+}</code></pre></div>
+</section>
+
+<section id="qc-rules">
+  <h2>QC rules and user messages</h2>
+  <div class="grid two">
+    <div class="card">
+      <h3>Raw QC rules</h3>
+      <div class="checklist">
+        <div class="check warnmark">Warn if adapter content is high.</div>
+        <div class="check warnmark">Warn if per-base quality degrades strongly at read ends.</div>
+        <div class="check warnmark">Warn if GC distribution is abnormal.</div>
+        <div class="check warnmark">Warn if duplication is unusually high.</div>
+        <div class="check x">Fail only if input cannot be read or report is not produced.</div>
+      </div>
+    </div>
+    <div class="card">
+      <h3>Trimming rules</h3>
+      <div class="checklist">
+        <div class="check warnmark">Warn if &lt;80% reads retained.</div>
+        <div class="check warnmark">Warn if adapter content remains high after trimming.</div>
+        <div class="check x">Fail if trimmed FASTQ is empty.</div>
+        <div class="check x">Fail if &lt;50% reads retained unless expert override is approved.</div>
+      </div>
+    </div>
+  </div>
+  <h3>User-facing messages</h3>
+  <table>
+    <thead><tr><th>Condition</th><th>UI message</th><th>Suggested action</th></tr></thead>
+    <tbody>
+      <tr><td>Adapter content high before trimming</td><td>“Adapter contamination detected in raw reads.”</td><td>Run trimming with fastp default settings.</td></tr>
+      <tr><td>Low quality at read ends</td><td>“Read quality drops near the end of reads.”</td><td>Use Q20 quality trimming; inspect post-trim QC.</td></tr>
+      <tr><td>Many reads discarded</td><td>“Trimming removed more reads than expected.”</td><td>Check adapter sequence and minimum length threshold.</td></tr>
+      <tr><td>Clean raw QC</td><td>“Raw reads look clean.”</td><td>Allow expert skip, but guided mode can still run light trimming.</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section id="install">
+  <h2>Installation options</h2>
+  <div class="grid three">
+    <div class="card"><h3>Conda/Mamba</h3><div class="code-wrap"><div class="code-head">Local env<button class="copy">Copy</button></div><pre><code>mamba create -n rnaseq-preprocess \
+  -c conda-forge -c bioconda \
+  fastqc falco fastp cutadapt multiqc nextflow
+
+mamba activate rnaseq-preprocess</code></pre></div></div>
+    <div class="card"><h3>Docker</h3><div class="code-wrap"><div class="code-head">No local install<button class="copy">Copy</button></div><pre><code>docker pull biocontainers/fastqc:v0.12.1_cv4
+docker pull quay.io/biocontainers/fastp:0.23.4--h5f740d0_0
+docker pull quay.io/biocontainers/cutadapt:5.1--py313h1a76870_0</code></pre></div></div>
+    <div class="card"><h3>AWS</h3><div class="code-wrap"><div class="code-head">Requirements<button class="copy">Copy</button></div><pre><code># Need before running:
+# 1. AWS Batch compute environment
+# 2. AWS Batch job queue
+# 3. S3 input/output/work buckets
+# 4. IAM permissions for Batch + S3
+# 5. Container images accessible by Batch</code></pre></div></div>
+  </div>
+</section>
+
+<section id="refs">
+  <h2>References and verification notes</h2>
+  <p>This tutorial was built from the SurvOm RNA-seq module policy and the uploaded module reference, then cleaned into a single production/student tutorial. Command flags were checked against current official or primary project documentation.</p>
+  <table>
+    <thead><tr><th>Topic</th><th>Reference</th><th>What was verified</th></tr></thead>
+    <tbody>
+      <tr><td>FastQC</td><td><a href="https://www.bioinformatics.babraham.ac.uk/projects/fastqc/" target="_blank">Babraham FastQC</a> and <a href="https://github.com/s-andrews/FastQC" target="_blank">FastQC source</a></td><td>Purpose, HTML reports, command-line options such as outdir, threads, adapters, contaminants.</td></tr>
+      <tr><td>Falco</td><td><a href="https://github.com/smithlabcode/falco" target="_blank">smithlabcode/falco</a></td><td>FastQC-compatible outputs: fastqc_data.txt, fastqc_report.html, summary.txt; outdir behavior.</td></tr>
+      <tr><td>fastp</td><td><a href="https://github.com/OpenGene/fastp" target="_blank">OpenGene/fastp</a></td><td>Quality filter, length filter, adapter detection, JSON/HTML outputs, polyG/polyX options.</td></tr>
+      <tr><td>Cutadapt</td><td><a href="https://cutadapt.readthedocs.io/en/stable/" target="_blank">Cutadapt documentation</a></td><td>Adapters, paired-end options, quality trimming, minimum length, JSON report, cores.</td></tr>
+      <tr><td>Nextflow AWS Batch</td><td><a href="https://docs.seqera.io/nextflow/executor" target="_blank">Seqera/Nextflow executor docs</a></td><td>AWS Batch executor, required containers, S3 work directory, process.executor = awsbatch.</td></tr>
+    </tbody>
+  </table>
+  <div class="footer">SurvOm tutorial module set: 03 Raw Read Quality Control + 04 Adapter and Quality Trimming. Designed for guided workflow UI, chat execution, local infrastructure, and AWS Batch.</div>
+</section>
+</main>
+</div>
+<script>
+document.querySelectorAll('.copy').forEach((btn)=>{
+  btn.addEventListener('click', async ()=>{
+    const code = btn.closest('.code-wrap').querySelector('code').innerText;
+    try { await navigator.clipboard.writeText(code); btn.textContent='Copied'; setTimeout(()=>btn.textContent='Copy',1200); }
+    catch(e){ btn.textContent='Select text'; setTimeout(()=>btn.textContent='Copy',1200); }
+  });
+});
+</script>
+</body>
+</html>

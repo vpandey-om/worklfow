@@ -1,0 +1,69 @@
+.app-shell {
+  display: flex;
+  min-height: 100vh;
+  background: #f7f8fa;
+}
+
+.sidebar {
+  width: 380px;
+  min-width: 380px;
+  max-width: 380px;
+  background: #ffffff;
+  border-right: 1px solid #dee2e6;
+  overflow-y: auto;
+}
+
+.content {
+  flex: 1;
+  min-width: 0;
+}
+
+.dash-upload-zone {
+  border: 1px dashed #517aa3;
+  border-radius: 8px;
+  padding: 16px;
+  background: #f9fbfd;
+  cursor: pointer;
+  text-align: center;
+  min-height: 86px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.dash-upload-zone:hover {
+  background: #eef6ff;
+  border-color: #245f9e;
+}
+
+.drop-zone {
+  border: 1px dashed #8aa4c2;
+  border-radius: 8px;
+  padding: 14px;
+  background: #f9fbfd;
+}
+
+.drop-zone:hover {
+  background: #eef6ff;
+}
+
+.log-panel {
+  max-height: 420px;
+  overflow: auto;
+  white-space: pre-wrap;
+  font-size: 12px;
+}
+
+.accordion-button {
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.advanced-options summary {
+  cursor: pointer;
+}
+
+.advanced-options {
+  border-top: 1px solid #e9ecef;
+  padding-top: 10px;
+}

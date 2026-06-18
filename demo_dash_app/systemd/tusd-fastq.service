@@ -1,0 +1,19 @@
+[Unit]
+Description=SurvOm FASTQ tusd upload server
+After=network.target
+
+[Service]
+Type=simple
+User=<USER>
+WorkingDirectory=/data/shared/vikash/mult-omics/demo_dash_app
+ExecStart=/usr/local/bin/tusd \
+  -host 127.0.0.1 \
+  -port 1080 \
+  -base-path /files/ \
+  -upload-dir /data/shared/vikash/mult-omics/demo_dash_app/tusd-data \
+  -hooks-dir /data/shared/vikash/mult-omics/demo_dash_app/tusd-hooks
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,10 @@
+run_id: ggal_qc_only_test
+omics: rnaseq
+execution_profile: local
+input: testdata/ggal_gut_samplesheet.csv
+outdir: results/ggal_qc_only_test
+selected_steps:
+  - rnaseq_03_raw_read_qc
+params:
+  qc_tool: fastqc
+  threads: 4
