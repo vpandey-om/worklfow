@@ -19,6 +19,8 @@ from services.workflow_service import WorkflowService
 
 APP_ROOT = Path(__file__).resolve().parent
 PIPELINE_ROOT = APP_ROOT.parent / "survom-pipelines"
+DEMO_REFERENCE_ROOT = PIPELINE_ROOT / "assets" / "demo_reference"
+MINI_GALLUS_REFERENCE_ROOT = APP_ROOT.parent / "refs" / "gallus_gallus_ensembl116" / "mini_ref"
 MAX_UPLOAD_BYTES = int(50 * 1024 * 1024 * 1024)
 DEFAULT_CUTADAPT_ADAPTER_R1 = "AGATCGGAAGAGCACACGTCTGAACTCCAGTCA"
 DEFAULT_CUTADAPT_ADAPTER_R2 = "AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGT"
@@ -35,6 +37,10 @@ CUTADAPT_NOT_AVAILABLE_MESSAGE = (
 CUTADAPT_DOCKER_PROFILE_MESSAGE = (
     "Cutadapt is not installed in the active local environment, so this run will use "
     "the local Docker profile with the Cutadapt container."
+)
+SALMON_DOCKER_PROFILE_MESSAGE = (
+    "Salmon is not installed in the active local environment, so this run will use "
+    "the local Docker profile with the Salmon container."
 )
 
 URL_PREFIX = "/upload/"
@@ -122,11 +128,20 @@ def workflow_options_for_omics(omics_type: str):
     config = omics_types.get(omics_type, {})
     if not config.get("enabled"):
         return [{"label": "Coming soon", "value": "coming_soon", "disabled": True}]
-    return [
-        {"label": steps_by_id[workflow_id].get("label", steps_by_id[workflow_id]["name"]), "value": workflow_id}
-        for workflow_id in config.get("workflows", [])
-        if workflow_id in steps_by_id
-    ]
+    chained_ids = ["salmon_count_matrix", "star_count_matrix", "qc_trim_strandedness"]
+    workflows = [workflow_id for workflow_id in config.get("workflows", []) if workflow_id in steps_by_id]
+    atomic = [workflow_id for workflow_id in workflows if steps_by_id[workflow_id].get("label", "").startswith("Atomic ")]
+    chained = [workflow_id for workflow_id in chained_ids if workflow_id in workflows]
+    other = [workflow_id for workflow_id in workflows if workflow_id not in set(atomic) | set(chained)]
+
+    def option(workflow_id: str) -> dict:
+        return {"label": steps_by_id[workflow_id].get("label", steps_by_id[workflow_id]["name"]), "value": workflow_id}
+
+    options = [option(workflow_id) for workflow_id in atomic + other]
+    if chained:
+        options.append({"label": "Chained workflows", "value": "__chained_workflows__", "disabled": True})
+        options.extend(option(workflow_id) for workflow_id in chained)
+    return options
 
 
 def ensure_demo_project(tester_id: str | None, omics_type: str | None):
@@ -257,8 +272,41 @@ def upload_box(upload_id: str, title: str, detail: str, multiple: bool):
     )
 
 
+def workflow_section(title: str, children, section_id: str | None = None, wrapper_id: str | None = None):
+    accordion = dbc.Accordion(
+        [
+            dbc.AccordionItem(
+                children,
+                title=title,
+                item_id=section_id or title.lower().replace(" ", "-"),
+            )
+        ],
+        start_collapsed=True,
+        always_open=True,
+        className="workflow-settings-accordion mb-2",
+    )
+    if wrapper_id:
+        return html.Div(accordion, id=wrapper_id)
+    return accordion
+
+
+def raw_qc_parameter_panel():
+    return workflow_section(
+        "Raw QC settings",
+        [
+            html.Div(
+                "FastQC runs with the default robust settings. Outputs are the FastQC HTML and ZIP reports.",
+                className="small text-muted",
+            ),
+        ],
+        "raw-qc-settings",
+        "raw-qc-parameter-panel",
+    )
+
+
 def trimming_parameter_panel():
-    return html.Div(
+    return workflow_section(
+        "Trimming settings",
         [
             html.Div(
                 "Recommended defaults are fastp, Q20, minimum length 20, and polyG auto.",
@@ -363,7 +411,264 @@ def trimming_parameter_panel():
                 className="advanced-options mt-2",
             ),
         ],
-        id="trimming-parameter-panel",
+        "trimming-settings",
+        "trimming-parameter-panel",
+    )
+
+
+def strandedness_parameter_panel():
+    return workflow_section(
+        "Strandedness settings",
+        [
+            html.Div(
+                "Runs after trimming/post-trim QC. Default is Salmon -l A on trimmed FASTQ; STAR/RSeQC is fallback validation only.",
+                className="small text-muted mb-2",
+            ),
+            dbc.Label("Inference method", className="small fw-semibold"),
+            dbc.Select(
+                id="strandedness-method-dropdown",
+                options=[
+                    {"label": "Salmon auto-detection default", "value": "salmon_auto"},
+                    {"label": "RSeQC fallback/validation", "value": "rseqc_validation"},
+                ],
+                value="salmon_auto",
+                size="sm",
+                className="mb-2",
+            ),
+            html.Div(
+                [
+                    dbc.Label("Salmon transcriptome index", className="small fw-semibold"),
+                    dbc.Input(
+                        id="salmon-index-input",
+                        type="text",
+                        placeholder="/path/to/salmon_index",
+                        size="sm",
+                        className="mb-2",
+                    ),
+                ],
+                id="salmon-strandedness-fields",
+            ),
+            dbc.Label("Reads sampled for inference", className="small fw-semibold"),
+            dbc.Input(
+                id="strandedness-inference-reads-input",
+                type="number",
+                min=10000,
+                max=5000000,
+                value=1000000,
+                size="sm",
+                className="mb-2",
+            ),
+            html.Div(
+                [
+                    dbc.Label("Existing sorted BAM for RSeQC", className="small fw-semibold"),
+                    dbc.Input(
+                        id="existing-bam-input",
+                        type="text",
+                        placeholder="/path/to/sample.sorted.bam",
+                        size="sm",
+                        className="mb-2",
+                    ),
+                    dbc.Label("STAR genome index for RSeQC fallback", className="small fw-semibold"),
+                    dbc.Input(
+                        id="star-index-input",
+                        type="text",
+                        placeholder="/path/to/star_index",
+                        size="sm",
+                        className="mb-2",
+                    ),
+                    dbc.Label("RSeQC BED annotation", className="small fw-semibold"),
+                    dbc.Input(
+                        id="rseqc-ref-bed-input",
+                        type="text",
+                        placeholder="/path/to/genes.bed",
+                        size="sm",
+                        className="mb-2",
+                    ),
+                    dbc.Label("RSeQC strandedness threshold", className="small fw-semibold"),
+                    dbc.Input(
+                        id="rseqc-stranded-threshold-input",
+                        type="number",
+                        min=0.5,
+                        max=0.95,
+                        step="any",
+                        value=0.6,
+                        size="sm",
+                        className="mb-2",
+                    ),
+                ],
+                id="rseqc-strandedness-fields",
+            ),
+            dbc.Label("Manual approval / override before downstream", className="small fw-semibold"),
+            dbc.Select(
+                id="manual-strandedness-dropdown",
+                options=[
+                    {"label": "Pending auto inference", "value": "pending"},
+                    {"label": "Unstranded / U", "value": "U"},
+                    {"label": "Forward stranded / SF", "value": "SF"},
+                    {"label": "Reverse stranded / SR", "value": "SR"},
+                    {"label": "Paired inward unstranded / IU", "value": "IU"},
+                    {"label": "Paired inward forward / ISF", "value": "ISF"},
+                    {"label": "Paired inward reverse / ISR", "value": "ISR"},
+                ],
+                value="pending",
+                size="sm",
+                className="mb-2",
+            ),
+            html.Div(id="strandedness-approval-message", className="small text-muted"),
+        ],
+        "strandedness-settings",
+        "strandedness-parameter-panel",
+    )
+
+
+def reference_parameter_panel():
+    return dbc.Card(
+        dbc.CardBody(
+            [
+                html.H6("Build or Validate Reference", className="mb-1"),
+                html.Div(
+                    "Use a lightweight demo reference for testing, select an existing bundle, or provide custom reference paths.",
+                    className="small text-muted mb-2",
+                ),
+                html.Div(
+                    "This appears here because strandedness inference needs a Salmon index by default; STAR/RSeQC validation needs a genome reference or BED annotation.",
+                    className="small text-muted mb-2",
+                ),
+                dbc.RadioItems(
+                    id="reference-mode-dropdown",
+                    options=[
+                        {"label": "Demo reference", "value": "demo_reference"},
+                        {"label": "Existing reference bundle", "value": "prebuilt_reference"},
+                        {"label": "Custom reference files", "value": "custom_reference"},
+                    ],
+                    value="demo_reference",
+                    className="reference-choice mb-2",
+                    inputClassName="me-1",
+                    labelClassName="d-block mb-1",
+                ),
+                html.Div(
+                    [
+                        dbc.Label("Reference bundle path", className="small fw-semibold"),
+                        dbc.Input(
+                            id="reference-bundle-input",
+                            type="text",
+                            placeholder="/path/to/validated_reference_bundle.json or bundle directory",
+                            size="sm",
+                            className="mb-2",
+                        ),
+                    ],
+                    id="reference-bundle-fields",
+                ),
+                html.Div(
+                    [
+                        dbc.Label("Route", className="small fw-semibold"),
+                        dbc.Select(
+                            id="selected-route-dropdown",
+                            options=[
+                                {"label": "Salmon route: fast transcript quantification", "value": "salmon"},
+                                {"label": "STAR route: genome alignment and gene counting", "value": "star"},
+                                {"label": "HISAT2 route: genome alignment", "value": "hisat2"},
+                                {"label": "Custom workflow", "value": "custom"},
+                            ],
+                            value="salmon",
+                            size="sm",
+                            className="mb-2",
+                        ),
+                        dbc.Label("Organism", className="small fw-semibold"),
+                        dbc.Input(id="organism-input", type="text", value="demo", size="sm", className="mb-2"),
+                        dbc.Label("Genome build", className="small fw-semibold"),
+                        dbc.Input(id="genome-build-input", type="text", value="demo_build", size="sm", className="mb-2"),
+                        dbc.Label("Genome FASTA", className="small fw-semibold"),
+                        dbc.Input(id="genome-fasta-input", type="text", size="sm", className="mb-2"),
+                        dbc.Label("GTF annotation", className="small fw-semibold"),
+                        dbc.Input(id="gtf-input", type="text", size="sm", className="mb-2"),
+                        dbc.Label("Transcriptome FASTA", className="small fw-semibold"),
+                        dbc.Input(id="transcriptome-fasta-input", type="text", size="sm", className="mb-2"),
+                        dbc.Label("tx2gene mapping", className="small fw-semibold"),
+                        dbc.Input(id="tx2gene-input", type="text", size="sm", className="mb-2"),
+                        dbc.Label("HISAT2 index", className="small fw-semibold"),
+                        dbc.Input(
+                            id="hisat2-index-input",
+                            type="text",
+                            placeholder="/path/to/hisat2_index",
+                            size="sm",
+                            className="mb-2",
+                        ),
+                    ],
+                    id="custom-reference-fields",
+                ),
+                html.Div(id="reference-status-message", className="small text-muted"),
+            ],
+        ),
+        id="reference-parameter-panel",
+        className="mb-2",
+    )
+
+
+def strandedness_input_panel():
+    return dbc.Card(
+        dbc.CardBody(
+            [
+                html.H6("Trimmed FASTQ input", className="mb-1"),
+                html.Div(
+                    "Use trimmed FASTQs from an earlier run, or manually selected trimmed FASTQ files, for atomic downstream steps.",
+                    className="small text-muted mb-2",
+                ),
+                dbc.RadioItems(
+                    id="trim-input-mode",
+                    options=[
+                        {"label": "Use trimmed FASTQs from previous run", "value": "previous_manifest"},
+                        {"label": "Upload/select trimmed FASTQs manually", "value": "manual_trimmed_fastq"},
+                    ],
+                    value="previous_manifest",
+                    inputClassName="me-1",
+                    labelClassName="d-block mb-1",
+                    className="mb-2",
+                ),
+                html.Div(
+                    [
+                        dbc.Label("Previous trim manifest", className="small fw-semibold"),
+                        dbc.Select(id="trim-manifest-select", size="sm", className="mb-2"),
+                        html.Div(id="trim-manifest-message", className="small text-muted"),
+                    ],
+                    id="previous-trim-manifest-fields",
+                ),
+                html.Div(
+                    "For manual mode, select uploaded trimmed FASTQ files in the Uploaded files checklist above.",
+                    id="manual-trimmed-fastq-message",
+                    className="small text-muted",
+                ),
+            ]
+        ),
+        id="strandedness-input-panel",
+        className="mb-3",
+    )
+
+
+def execution_parameter_panel():
+    return workflow_section(
+        "Execution settings",
+        [
+            html.Div(
+                "Local is simplest. Docker is useful when Salmon, Cutadapt, STAR, or RSeQC are not installed locally.",
+                className="small text-muted mb-2",
+            ),
+            dbc.Label("Nextflow execution profile", className="small fw-semibold"),
+            dbc.Select(
+                id="execution-profile-dropdown",
+                options=[
+                    {"label": "Local environment", "value": "local"},
+                    {"label": "Local Docker containers", "value": "local_docker"},
+                    {"label": "Docker profile", "value": "docker"},
+                    {"label": "Singularity profile", "value": "singularity"},
+                ],
+                value="local",
+                size="sm",
+                className="mb-2",
+            ),
+            html.Div("Thread and memory defaults are controlled by the Nextflow process config.", className="form-text small"),
+        ],
+        "execution-settings",
     )
 
 
@@ -420,6 +725,13 @@ sidebar = html.Div(
                 upload_box("fastq-upload", "Select or drop FASTQ files here", ".fastq, .fastq.gz, .fq, .fq.gz", True),
                 html.H6("Upload sample sheet / metadata"),
                 upload_box("metadata-upload", "Select or drop sample sheet here", ".csv, .tsv, .xlsx", False),
+                html.H6("Upload reference files"),
+                upload_box(
+                    "reference-upload",
+                    "Select or drop reference FASTA/GTF/tx2gene/index archive here",
+                    ".fa, .fa.gz, .gtf, .gtf.gz, .tsv, .zip, .tar.gz",
+                    True,
+                ),
             ],
             id="upload-panel",
         ),
@@ -445,6 +757,7 @@ sidebar = html.Div(
                 {"label": "All categories", "value": "all"},
                 {"label": "FASTQ only", "value": "fastq"},
                 {"label": "Metadata only", "value": "metadata"},
+                {"label": "Reference only", "value": "reference"},
                 {"label": "Other only", "value": "other"},
             ],
             value="all",
@@ -461,8 +774,25 @@ sidebar = html.Div(
             labelClassName="d-block mb-1",
         ),
 
-        html.H6("Workflow parameters"),
-        html.Div(trimming_parameter_panel(), id="parameter-panel", className="mb-3"),
+        html.H6("Workflow setup"),
+        html.Div(strandedness_input_panel(), id="strandedness-input-wrapper", className="mb-3"),
+        html.Div(reference_parameter_panel(), id="reference-panel", className="mb-3"),
+        dbc.Switch(
+            id="advanced-options-toggle",
+            label="Advanced options",
+            value=False,
+            className="mb-2",
+        ),
+        html.Div(
+            [
+                html.Div(raw_qc_parameter_panel(), id="raw-qc-panel", className="mb-2"),
+                html.Div(trimming_parameter_panel(), id="parameter-panel", className="mb-2"),
+                html.Div(strandedness_parameter_panel(), id="strandedness-panel", className="mb-2"),
+                html.Div(execution_parameter_panel(), id="execution-panel", className="mb-3"),
+            ],
+            id="advanced-workflow-options",
+            className="mb-2",
+        ),
 
         dbc.Button(
             "Run analysis",
@@ -759,6 +1089,49 @@ def workflow_has_trimming(workflow_id: str) -> bool:
     return bool(step and "rnaseq_04_adapter_quality_trimming" in step.get("selected_steps", []))
 
 
+def workflow_has_strandedness(workflow_id: str) -> bool:
+    step = next((s for s in steps if s["id"] == workflow_id), None)
+    return bool(step and "rnaseq_06_strandedness_inference" in step.get("selected_steps", []))
+
+
+def workflow_has_reference(workflow_id: str) -> bool:
+    step = next((s for s in steps if s["id"] == workflow_id), None)
+    return bool(step and "rnaseq_06a_reference_build_validation" in step.get("selected_steps", []))
+
+
+def workflow_has_raw_qc(workflow_id: str) -> bool:
+    step = next((s for s in steps if s["id"] == workflow_id), None)
+    return bool(step and "rnaseq_03_raw_read_qc" in step.get("selected_steps", []))
+
+
+def workflow_is_strandedness_only(workflow_id: str) -> bool:
+    step = next((s for s in steps if s["id"] == workflow_id), None)
+    selected = set(step.get("selected_steps", [])) if step else set()
+    return bool(
+        "rnaseq_06_strandedness_inference" in selected
+        and "rnaseq_04_adapter_quality_trimming" not in selected
+        and "rnaseq_03_raw_read_qc" not in selected
+    )
+
+
+def workflow_uses_existing_trimmed_reads(workflow_id: str) -> bool:
+    step = next((s for s in steps if s["id"] == workflow_id), None)
+    selected = set(step.get("selected_steps", [])) if step else set()
+    trimmed_consumers = {
+        "rnaseq_05_post_trim_quality_control",
+        "rnaseq_06_strandedness_inference",
+        "rnaseq_07_salmon_quantification",
+        "rnaseq_09_star_alignment",
+        "rnaseq_09d_hisat2_alignment",
+    }
+    return bool(trimmed_consumers & selected) and "rnaseq_04_adapter_quality_trimming" not in selected
+
+
+def workflow_needs_fastq_input(workflow_id: str) -> bool:
+    step = next((s for s in steps if s["id"] == workflow_id), None)
+    return workflow_service.needs_fastq_input(list(step.get("selected_steps", []))) if step else True
+
+
 def normalize_empty(value):
     return None if value == "" else value
 
@@ -773,12 +1146,25 @@ def docker_available() -> bool:
 
 def resolve_execution_profile(params: dict) -> tuple[str, str | None]:
     requested = params.get("execution_profile") or "local"
-    if params.get("trimming_tool") != "cutadapt":
+    needs_cutadapt = params.get("trimming_tool") == "cutadapt"
+    needs_salmon = params.get("strandedness_method") == "salmon_auto" or params.get("selected_route") == "salmon"
+    needs_rseqc = params.get("strandedness_method") == "rseqc_validation"
+    if not needs_cutadapt and not needs_salmon:
+        if not needs_rseqc:
+            return requested, None
+    if uses_container_profile(requested):
         return requested, None
-    if shutil.which("cutadapt") or uses_container_profile(requested):
+    missing = []
+    if needs_cutadapt and not shutil.which("cutadapt"):
+        missing.append(CUTADAPT_DOCKER_PROFILE_MESSAGE)
+    if needs_salmon and not shutil.which("salmon"):
+        missing.append(SALMON_DOCKER_PROFILE_MESSAGE)
+    if needs_rseqc and (not shutil.which("infer_experiment.py") or (not params.get("existing_bam") and not shutil.which("STAR"))):
+        missing.append("STAR/RSeQC are not installed in the active local environment, so this run will use the local Docker profile with STAR/RSeQC containers.")
+    if not missing:
         return requested, None
     if docker_available():
-        return "local_docker", CUTADAPT_DOCKER_PROFILE_MESSAGE
+        return "local_docker", " ".join(missing)
     return requested, None
 
 
@@ -810,6 +1196,26 @@ def resolve_cutadapt_defaults(params: dict) -> dict:
     return resolved
 
 
+def resolve_reference_defaults(params: dict) -> dict:
+    resolved = dict(params)
+    if resolved.get("reference_mode") != "demo_reference":
+        return resolved
+
+    mini_fasta = MINI_GALLUS_REFERENCE_ROOT / "Gallus_gallus.mini.fa.gz"
+    mini_gtf = MINI_GALLUS_REFERENCE_ROOT / "Gallus_gallus.mini.gtf.gz"
+    mini_tx2gene = MINI_GALLUS_REFERENCE_ROOT / "tx2gene.tsv"
+    resolved["organism"] = resolved.get("organism") or "Gallus_gallus"
+    resolved["genome_build"] = resolved.get("genome_build") or "Ensembl_116_mini_GRCg7b"
+    resolved["genome_fasta"] = resolved.get("genome_fasta") or str(mini_fasta)
+    resolved["gtf"] = resolved.get("gtf") or str(mini_gtf)
+    resolved["transcriptome_fasta"] = resolved.get("transcriptome_fasta") or str(mini_fasta)
+    resolved["tx2gene"] = resolved.get("tx2gene") or str(mini_tx2gene)
+    resolved["salmon_index"] = resolved.get("salmon_index") or None
+    resolved["star_index"] = resolved.get("star_index") or None
+    resolved["hisat2_index"] = resolved.get("hisat2_index") or None
+    return resolved
+
+
 def validate_run_params(
     workflow_id: str,
     params: dict,
@@ -818,45 +1224,46 @@ def validate_run_params(
     omics_type: str,
     selected_files: dict[str, list[str]] | None = None,
 ) -> list[str]:
-    if not workflow_has_trimming(workflow_id):
-        return []
     params = resolve_cutadapt_defaults(params)
+    params = resolve_reference_defaults(params)
 
     errors = []
-    try:
-        quality = int(params.get("quality_threshold", 20))
-        if quality not in {15, 20, 25, 30}:
-            errors.append("Minimum base quality must be Q15, Q20, Q25, or Q30.")
-    except (TypeError, ValueError):
-        errors.append("Minimum base quality must be an integer.")
-
-    try:
-        min_len = int(params.get("minimum_read_length", 20))
-        if min_len not in {20, 25, 30, 50}:
-            errors.append("Minimum read length must be 20, 25, 30, or 50 bp.")
-    except (TypeError, ValueError):
-        errors.append("Minimum read length must be an integer.")
-
-    if str(params.get("trim_poly_g", "auto")).lower() not in {"auto", "true", "false"}:
-        errors.append("Trim polyG tails must be Auto, True, or False.")
-    if str(params.get("trimming_tool", "fastp")).lower() not in {"fastp", "cutadapt"}:
-        errors.append("Trimming tool must be fastp or Cutadapt.")
-
-    for field in ("trim_front_r1", "trim_front_r2"):
+    has_trimming = workflow_has_trimming(workflow_id)
+    if has_trimming:
         try:
-            if int(params.get(field, 0) or 0) < 0:
-                errors.append(f"{field} must be zero or greater.")
+            quality = int(params.get("quality_threshold", 20))
+            if quality not in {15, 20, 25, 30}:
+                errors.append("Minimum base quality must be Q15, Q20, Q25, or Q30.")
         except (TypeError, ValueError):
-            errors.append(f"{field} must be an integer.")
+            errors.append("Minimum base quality must be an integer.")
 
-    if params.get("trimming_tool") == "cutadapt":
+        try:
+            min_len = int(params.get("minimum_read_length", 20))
+            if min_len not in {20, 25, 30, 50}:
+                errors.append("Minimum read length must be 20, 25, 30, or 50 bp.")
+        except (TypeError, ValueError):
+            errors.append("Minimum read length must be an integer.")
+
+        if str(params.get("trim_poly_g", "auto")).lower() not in {"auto", "true", "false"}:
+            errors.append("Trim polyG tails must be Auto, True, or False.")
+        if str(params.get("trimming_tool", "fastp")).lower() not in {"fastp", "cutadapt"}:
+            errors.append("Trimming tool must be fastp or Cutadapt.")
+
+        for field in ("trim_front_r1", "trim_front_r2"):
+            try:
+                if int(params.get(field, 0) or 0) < 0:
+                    errors.append(f"{field} must be zero or greater.")
+            except (TypeError, ValueError):
+                errors.append(f"{field} must be an integer.")
+
+    if has_trimming and params.get("trimming_tool") == "cutadapt":
         if not shutil.which("cutadapt") and not uses_container_profile(params.get("execution_profile")) and not docker_available():
             errors.append(CUTADAPT_NOT_AVAILABLE_MESSAGE)
         if not params.get("adapter_sequence_r1"):
             errors.append("Cutadapt requires an R1 adapter sequence.")
         selected_fastqs = [Path(path).name for path in (selected_files or {}).get("fastq", [])]
         if not selected_fastqs:
-            uploads = upload_service.list_uploads(session_id, tester_id, omics_type)
+            uploads = upload_service.list_uploads(session_id, tester_id, omics_type, params.get("project_id"))
             selected_fastqs = [item["name"] for item in uploads["fastq"]]
         has_r2 = any("_R2" in name or "_2" in name for name in selected_fastqs)
         if has_r2 and not params.get("adapter_sequence_r2"):
@@ -874,13 +1281,100 @@ def validate_run_params(
         except (TypeError, ValueError):
             errors.append("Cutadapt minimum overlap must be an integer.")
 
-    return errors
+    if workflow_has_strandedness(workflow_id):
+        method = params.get("strandedness_method") or "salmon_auto"
+        if method not in {"salmon_auto", "rseqc_validation"}:
+            errors.append("Strandedness method must be Salmon auto-detection or RSeQC fallback/validation.")
+        if method == "salmon_auto" and not params.get("salmon_index") and not workflow_has_reference(workflow_id):
+            errors.append("Provide a Salmon transcriptome index path for Salmon -l A strandedness inference.")
+        if method == "salmon_auto" and params.get("salmon_index"):
+            salmon_index = Path(str(params["salmon_index"])).expanduser()
+            if not (salmon_index / "versionInfo.json").exists():
+                errors.append(
+                    "Selected Salmon index is not valid: missing versionInfo.json. "
+                    "Build a real Salmon index or choose a valid existing reference bundle."
+                )
+        if method == "rseqc_validation":
+            if not params.get("rseqc_ref_bed"):
+                errors.append("Provide an RSeQC BED annotation file for infer_experiment.py.")
+            if not params.get("existing_bam") and not params.get("star_index"):
+                errors.append("Provide an existing sorted BAM, or provide a STAR genome index so the fallback can align trimmed FASTQ first.")
+            try:
+                threshold = float(params.get("rseqc_stranded_threshold", 0.6) or 0.6)
+                if not 0.5 <= threshold <= 0.95:
+                    errors.append("RSeQC strandedness threshold must be between 0.5 and 0.95.")
+            except (TypeError, ValueError):
+                errors.append("RSeQC strandedness threshold must be numeric.")
+        try:
+            read_count = int(params.get("strandedness_inference_reads", 1000000) or 1000000)
+            if not 10000 <= read_count <= 5000000:
+                errors.append("Reads sampled for strandedness inference must be between 10,000 and 5,000,000.")
+        except (TypeError, ValueError):
+            errors.append("Reads sampled for strandedness inference must be an integer.")
+
+    if workflow_has_reference(workflow_id):
+        mode = params.get("reference_mode") or "demo_reference"
+        route = params.get("selected_route") or "salmon"
+        if workflow_id in {"salmon_quant_only", "salmon_count_matrix", "qc_trim_strandedness"}:
+            route = "salmon"
+        elif workflow_id in {"star_align_only", "star_count_matrix", "star_htseq_route"}:
+            route = "star"
+        elif workflow_id in {"hisat2_align_only", "hisat2_alignment_route", "hisat2_featurecounts_route", "hisat2_htseq_route"}:
+            route = "hisat2"
+        if route not in {"salmon", "star", "hisat2", "custom"}:
+            errors.append("Reference route must be Salmon, STAR, HISAT2, or Custom workflow.")
+        salmon_route = route == "salmon" or workflow_id in {"salmon_quant_only", "salmon_count_matrix", "qc_trim_strandedness"}
+        star_route = route == "star" or workflow_id in {"star_align_only", "star_count_matrix", "star_htseq_route"}
+        hisat2_route = route == "hisat2" or workflow_id in {"hisat2_align_only", "hisat2_alignment_route", "hisat2_featurecounts_route", "hisat2_htseq_route"}
+        if salmon_route and params.get("salmon_index"):
+            salmon_index = Path(str(params["salmon_index"])).expanduser()
+            if not (salmon_index / "versionInfo.json").exists():
+                errors.append("Salmon reference index is missing versionInfo.json; build/provide a real Salmon index.")
+        if star_route and params.get("star_index"):
+            star_index = Path(str(params["star_index"])).expanduser()
+            if not (star_index / "Genome").exists():
+                errors.append("STAR reference index is missing Genome; build/provide a real STAR index.")
+        if hisat2_route and params.get("hisat2_index"):
+            hisat2_index = Path(str(params["hisat2_index"])).expanduser()
+            if not ((hisat2_index / "genome.1.ht2").exists() or (hisat2_index / "genome.1.ht2l").exists()):
+                errors.append("HISAT2 reference index is missing genome.1.ht2/genome.1.ht2l; build/provide a real HISAT2 index.")
+        if mode == "demo_reference":
+            return errors
+        if not params.get("organism"):
+            errors.append("Reference organism metadata is required.")
+        if not params.get("genome_build"):
+            errors.append("Reference genome build metadata is required.")
+        if salmon_route and not (params.get("transcriptome_fasta") and params.get("tx2gene")):
+            errors.append("Salmon route requires transcriptome FASTA and tx2gene. Salmon index is optional if it can be built.")
+        if star_route and not (params.get("genome_fasta") and params.get("gtf")):
+            errors.append("STAR route requires genome FASTA and GTF. STAR index is optional if it can be built.")
+        if hisat2_route and not params.get("genome_fasta"):
+            errors.append("HISAT2 route requires genome FASTA. HISAT2 index is optional if it can be built.")
+
+    return list(dict.fromkeys(errors))
 
 
 def run_parameter_summary(params: dict):
     if not params:
         return None
     poly_x = "on" if params.get("trim_poly_x") else "off"
+    strandedness_items = []
+    reference_items = []
+    if params.get("reference_mode"):
+        reference_items = [
+            html.Li(f"Reference mode: {params.get('reference_mode')}"),
+            html.Li(f"Selected route: {params.get('selected_route') or 'salmon'}"),
+            html.Li(f"Organism/build: {params.get('organism') or 'not set'} / {params.get('genome_build') or 'not set'}"),
+        ]
+    if params.get("strandedness_method"):
+        strandedness_items = [
+            html.Li(f"Strandedness method: {params.get('strandedness_method')}"),
+            html.Li(f"Salmon index: {params.get('salmon_index') or 'not set'}"),
+            html.Li(f"Existing BAM: {params.get('existing_bam') or 'not set'}"),
+            html.Li(f"STAR index: {params.get('star_index') or 'not set'}"),
+            html.Li(f"RSeQC BED: {params.get('rseqc_ref_bed') or 'not set'}"),
+            html.Li(f"Manual strandedness: {params.get('manual_strandedness') or 'pending inference'}"),
+        ]
     return html.Div(
         [
             html.H6("Run parameters", className="mt-3"),
@@ -893,8 +1387,64 @@ def run_parameter_summary(params: dict):
                     html.Li(f"PolyX trimming: {poly_x}"),
                     html.Li(f"Adapter preset: {params.get('adapter_preset') or 'not used'}"),
                     html.Li(f"Adapter source: {params.get('adapter_source') or 'not used'}"),
+                    *reference_items,
+                    *strandedness_items,
                 ],
                 className="small ps-3 mb-0",
+            ),
+        ]
+    )
+
+
+def strandedness_result_summary(files: list[str]):
+    calls = [Path(path) for path in files if path.endswith(".strandedness_call.json")]
+    if not calls:
+        return html.Div(
+            [
+                html.H6("Strandedness Inference", className="mt-3"),
+                dbc.Badge("pending", color="secondary"),
+                html.Div(
+                    "Run the strandedness workflow to infer library type before downstream quantification/alignment.",
+                    className="small text-muted mt-1",
+                ),
+            ]
+        )
+
+    items = []
+    for call_path in calls:
+        try:
+            call = json.loads(call_path.read_text())
+        except Exception as exc:
+            items.append(html.Li(f"{call_path.name}: failed to read call ({exc})"))
+            continue
+        raw_status = call.get("status", "pending")
+        display_status = "ambiguous" if raw_status == "needs_review" else raw_status
+        color = {
+            "pending": "secondary",
+            "running": "primary",
+            "completed": "success",
+            "ambiguous": "warning",
+            "failed": "danger",
+        }.get(display_status, "secondary")
+        inferred = call.get("inferred_library_type") or "not inferred"
+        items.append(
+            html.Li(
+                [
+                    html.Strong(call.get("sample_id", call_path.stem)),
+                    ": ",
+                    dbc.Badge(display_status, color=color, className="me-2"),
+                    f"inferred library type = {inferred}. ",
+                    html.Span(call.get("reason", ""), className="text-muted"),
+                ]
+            )
+        )
+    return html.Div(
+        [
+            html.H6("Strandedness Inference", className="mt-3"),
+            html.Ul(items, className="small ps-3 mb-1"),
+            html.Div(
+                "Approve the inferred type or choose an override in the Strandedness Inference panel before downstream Salmon quantification or STAR alignment.",
+                className="small text-muted",
             ),
         ]
     )
@@ -910,6 +1460,111 @@ def selected_file_summary(selected_files: dict | None):
     if not rows:
         return None
     return html.Div([html.H6("Selected files", className="mt-3"), html.Ul(rows, className="small ps-3 mb-0")])
+
+
+def process_status_badge(status: str | None):
+    value = (status or "pending").lower()
+    color = {
+        "pending": "secondary",
+        "running": "primary",
+        "completed": "success",
+        "succeeded": "success",
+        "failed": "danger",
+        "error": "danger",
+    }.get(value, "secondary")
+    return dbc.Badge(value, color=color)
+
+
+def artifact_link(path: str, label: str, session_id: str, tester_id: str, omics_type: str, project_id: str):
+    if not path:
+        return None
+    return html.A(
+        label,
+        href=(
+            f"{API_PREFIX}/file?path={path}"
+            f"&session_id={session_id}&tester_id={tester_id}&omics_type={omics_type}&project_id={project_id}"
+        ),
+        target="_blank",
+        className="me-2",
+    )
+
+
+def workflow_plan_component(record: dict, session_id: str, tester_id: str, omics_type: str, project_id: str):
+    steps = record.get("step_outputs") or []
+    if not steps:
+        return html.Div("No workflow plan available yet.", className="text-muted")
+    rows = []
+    for step in steps:
+        tasks = step.get("tasks") or []
+        first_task = tasks[0] if tasks else {}
+        missing = step.get("missing_outputs") or []
+        links = [
+            artifact_link(first_task.get("stdout_path"), "stdout", session_id, tester_id, omics_type, project_id),
+            artifact_link(first_task.get("stderr_path"), "stderr", session_id, tester_id, omics_type, project_id),
+            artifact_link(first_task.get("command_log_path"), "log", session_id, tester_id, omics_type, project_id),
+        ]
+        links = [link for link in links if link]
+        outputs = sum(output.get("count", 0) for output in step.get("outputs", []))
+        missing_text = ""
+        if missing:
+            missing_text = "Missing: " + ", ".join(item.get("pattern", "") for item in missing)
+        rows.append(
+            html.Tr(
+                [
+                    html.Td(step.get("process_name")),
+                    html.Td(process_status_badge(step.get("status"))),
+                    html.Td(step.get("step_id"), className="small"),
+                    html.Td(first_task.get("work_dir") or "", className="small text-break"),
+                    html.Td(str(outputs)),
+                    html.Td(missing_text, className="small text-danger"),
+                    html.Td(links),
+                ]
+            )
+        )
+    return html.Div(
+        [
+            html.H6("Generated atomic workflow"),
+            dbc.Table(
+                [
+                    html.Thead(
+                        html.Tr(
+                            [
+                                html.Th("Process"),
+                                html.Th("Status"),
+                                html.Th("Step ID"),
+                                html.Th("Work dir"),
+                                html.Th("Outputs"),
+                                html.Th("Missing outputs"),
+                                html.Th("Logs"),
+                            ]
+                        )
+                    ),
+                    html.Tbody(rows),
+                ],
+                bordered=True,
+                hover=True,
+                responsive=True,
+                size="sm",
+            ),
+        ]
+    )
+
+
+def log_block(title: str, content: str):
+    text = content or ""
+    return html.Div(
+        [
+            html.Div(
+                [
+                    html.Strong(title),
+                    dcc.Clipboard(content=text, title=f"Copy {title}", className="ms-2"),
+                ],
+                className="d-flex align-items-center mb-1",
+            ),
+            html.Pre(text or "(empty)", className="small bg-light border rounded p-2"),
+        ],
+        className="mb-3",
+    )
 
 
 def decode_dash_upload(contents: str) -> bytes:
@@ -955,6 +1610,45 @@ def file_list_component(
     info = html.Div(f"{len(records)} file(s) in this project. Select files to use for the next run.", className="text-muted")
     preserved = [path for path in (current_selection or []) if path in available_values]
     return info, options, preserved or default_values
+
+
+def infer_reference_inputs_from_uploads(tester_id: str, omics_type: str, project_id: str) -> dict[str, str | None]:
+    records = [
+        record
+        for record in job_store.list_upload_records(tester_id, omics_type, project_id)
+        if record.get("category") == "reference"
+    ]
+    inferred = {
+        "reference_bundle": None,
+        "genome_fasta": None,
+        "gtf": None,
+        "transcriptome_fasta": None,
+        "tx2gene": None,
+    }
+    fasta_candidates = []
+    for record in records:
+        name = (record.get("filename") or "").lower()
+        path = record.get("stored_path")
+        if not path:
+            continue
+        if name.endswith((".json", ".zip", ".tar", ".tar.gz", ".tgz")) and not inferred["reference_bundle"]:
+            inferred["reference_bundle"] = path
+        if name.endswith((".gtf", ".gtf.gz", ".gff", ".gff.gz", ".gff3", ".gff3.gz")) and not inferred["gtf"]:
+            inferred["gtf"] = path
+        if name.endswith((".tsv", ".csv")) and any(token in name for token in ("tx2gene", "transcript", "gene")) and not inferred["tx2gene"]:
+            inferred["tx2gene"] = path
+        if name.endswith((".fa", ".fasta", ".fa.gz", ".fasta.gz")):
+            fasta_candidates.append((name, path))
+    for name, path in fasta_candidates:
+        if any(token in name for token in ("transcript", "cdna", "rna")) and not inferred["transcriptome_fasta"]:
+            inferred["transcriptome_fasta"] = path
+        elif not inferred["genome_fasta"]:
+            inferred["genome_fasta"] = path
+    if not inferred["transcriptome_fasta"] and inferred["genome_fasta"]:
+        inferred["transcriptome_fasta"] = inferred["genome_fasta"]
+    if not inferred["genome_fasta"] and inferred["transcriptome_fasta"]:
+        inferred["genome_fasta"] = inferred["transcriptome_fasta"]
+    return inferred
 
 
 app.clientside_callback(
@@ -1061,6 +1755,25 @@ def configure_omics(omics_type):
 
 
 @app.callback(
+    Output("advanced-workflow-options", "style"),
+    Input("advanced-options-toggle", "value"),
+)
+def toggle_advanced_options(show_advanced):
+    return {"display": "block"} if show_advanced else {"display": "none"}
+
+
+@app.callback(
+    Output("raw-qc-panel", "style"),
+    Input("workflow-select", "value"),
+    Input("omics-select", "value"),
+)
+def show_raw_qc_parameters(workflow_id, omics_type):
+    if omics_type == "bulk_rnaseq" and workflow_has_raw_qc(workflow_id):
+        return {"display": "block"}
+    return {"display": "none"}
+
+
+@app.callback(
     Output("parameter-panel", "style"),
     Input("workflow-select", "value"),
     Input("omics-select", "value"),
@@ -1069,6 +1782,148 @@ def show_parameters(workflow_id, omics_type):
     if omics_type == "bulk_rnaseq" and workflow_has_trimming(workflow_id):
         return {"display": "block"}
     return {"display": "none"}
+
+
+@app.callback(
+    Output("strandedness-panel", "style"),
+    Input("workflow-select", "value"),
+    Input("omics-select", "value"),
+)
+def show_strandedness_parameters(workflow_id, omics_type):
+    if omics_type == "bulk_rnaseq" and workflow_has_strandedness(workflow_id):
+        return {"display": "block"}
+    return {"display": "none"}
+
+
+@app.callback(
+    Output("reference-panel", "style"),
+    Input("workflow-select", "value"),
+    Input("omics-select", "value"),
+)
+def show_reference_parameters(workflow_id, omics_type):
+    if omics_type == "bulk_rnaseq" and workflow_has_reference(workflow_id):
+        return {"display": "block"}
+    return {"display": "none"}
+
+
+@app.callback(
+    Output("strandedness-input-wrapper", "style"),
+    Input("workflow-select", "value"),
+    Input("omics-select", "value"),
+)
+def show_strandedness_input_panel(workflow_id, omics_type):
+    if omics_type == "bulk_rnaseq" and workflow_uses_existing_trimmed_reads(workflow_id):
+        return {"display": "block"}
+    return {"display": "none"}
+
+
+@app.callback(
+    Output("previous-trim-manifest-fields", "style"),
+    Output("manual-trimmed-fastq-message", "style"),
+    Input("trim-input-mode", "value"),
+)
+def show_trim_input_mode_fields(trim_input_mode):
+    if trim_input_mode == "manual_trimmed_fastq":
+        return {"display": "none"}, {"display": "block"}
+    return {"display": "block"}, {"display": "none"}
+
+
+@app.callback(
+    Output("trim-manifest-select", "options"),
+    Output("trim-manifest-select", "value"),
+    Output("trim-manifest-message", "children"),
+    Input("workflow-select", "value"),
+    Input("tester-select", "value"),
+    Input("omics-select", "value"),
+    Input("project-select", "value"),
+    Input("current-job", "data"),
+    State("current-session", "data"),
+    State("trim-manifest-select", "value"),
+)
+def configure_trim_manifest_options(workflow_id, tester_id, omics_type, project_id, current_job, session, current_value):
+    if not workflow_uses_existing_trimmed_reads(workflow_id) or not tester_id or not project_id:
+        return [], None, ""
+    session_id = (session or {}).get("session_id")
+    if not session_id:
+        return [], None, "Browser session is not ready yet."
+    options = workflow_service.trim_manifest_options(session_id, tester_id, omics_type or "bulk_rnaseq", project_id)
+    values = {item["value"] for item in options}
+    value = current_value if current_value in values else (options[0]["value"] if options else None)
+    message = "No previous trim manifest found for this student/project yet." if not options else f"{len(options)} previous trim manifest(s) available."
+    return options, value, message
+
+
+@app.callback(
+    Output("execution-panel", "style"),
+    Input("workflow-select", "value"),
+    Input("omics-select", "value"),
+)
+def show_execution_parameters(workflow_id, omics_type):
+    if omics_type == "bulk_rnaseq" and workflow_id in steps_by_id:
+        return {"display": "block"}
+    return {"display": "none"}
+
+
+@app.callback(
+    Output("reference-bundle-fields", "style"),
+    Output("custom-reference-fields", "style"),
+    Input("reference-mode-dropdown", "value"),
+)
+def show_reference_mode_fields(reference_mode):
+    if reference_mode == "prebuilt_reference":
+        return {"display": "block"}, {"display": "none"}
+    if reference_mode == "custom_reference":
+        return {"display": "none"}, {"display": "block"}
+    return {"display": "none"}, {"display": "none"}
+
+
+@app.callback(
+    Output("reference-status-message", "children"),
+    Input("reference-mode-dropdown", "value"),
+    Input("selected-route-dropdown", "value"),
+)
+def describe_reference_mode(reference_mode, selected_route):
+    mode_label = {
+        "demo_reference": "Demo reference is for workflow testing only, not biological interpretation.",
+        "prebuilt_reference": "Prebuilt reference mode validates existing FASTA/GTF/index files.",
+        "custom_reference": "Custom reference mode can build missing Salmon, STAR, or HISAT2 indexes from uploaded/provided reference files.",
+    }.get(reference_mode, "")
+    route_label = {
+        "salmon": "Salmon index is required or will be built from transcriptome FASTA.",
+        "star": "STAR index is required or will be built from genome FASTA plus GTF.",
+        "hisat2": "HISAT2 index is required or will be built from genome FASTA.",
+        "custom": "Choose the branch steps carefully; validation checks only selected downstream requirements.",
+    }.get(selected_route, "")
+    return f"{mode_label} {route_label}".strip()
+
+
+@app.callback(
+    Output("salmon-strandedness-fields", "style"),
+    Output("rseqc-strandedness-fields", "style"),
+    Input("strandedness-method-dropdown", "value"),
+    Input("workflow-select", "value"),
+)
+def show_strandedness_method_fields(strandedness_method, workflow_id):
+    if strandedness_method == "rseqc_validation":
+        return {"display": "none"}, {"display": "block"}
+    if workflow_has_reference(workflow_id):
+        return {"display": "none"}, {"display": "none"}
+    return {"display": "block"}, {"display": "none"}
+
+
+@app.callback(
+    Output("selected-route-dropdown", "value"),
+    Input("workflow-select", "value"),
+    State("selected-route-dropdown", "value"),
+)
+def sync_reference_route_with_workflow(workflow_id, current_route):
+    if workflow_id in {"salmon_quant_only", "salmon_count_matrix", "qc_trim_strandedness"}:
+        return "salmon"
+    if workflow_id in {"star_align_only", "star_count_matrix", "star_htseq_route"}:
+        return "star"
+    if workflow_id in {"hisat2_align_only", "hisat2_alignment_route", "hisat2_featurecounts_route", "hisat2_htseq_route"}:
+        return "hisat2"
+    return current_route or "salmon"
 
 
 @app.callback(
@@ -1103,6 +1958,16 @@ def populate_cutadapt_adapter_defaults(trimming_tool, adapter_preset, current_r1
 
 
 @app.callback(
+    Output("strandedness-approval-message", "children"),
+    Input("manual-strandedness-dropdown", "value"),
+)
+def describe_strandedness_approval(value):
+    if value and value != "pending":
+        return f"Manual override selected: {value}. Downstream Salmon/STAR may reuse this approved library type."
+    return "Pending: downstream Salmon quantification or STAR alignment should stay locked until inference completes or you approve an override."
+
+
+@app.callback(
     Output("run-analysis", "disabled"),
     Input("tester-select", "value"),
     Input("omics-select", "value"),
@@ -1121,8 +1986,10 @@ def toggle_run_button(tester_id, omics_type, workflow_id):
     Output("upload-message", "children"),
     Input("fastq-upload", "contents"),
     Input("metadata-upload", "contents"),
+    Input("reference-upload", "contents"),
     State("fastq-upload", "filename"),
     State("metadata-upload", "filename"),
+    State("reference-upload", "filename"),
     State("current-session", "data"),
     State("tester-select", "value"),
     State("omics-select", "value"),
@@ -1132,8 +1999,10 @@ def toggle_run_button(tester_id, omics_type, workflow_id):
 def save_dash_upload(
     fastq_contents,
     metadata_contents,
+    reference_contents,
     fastq_names,
     metadata_name,
+    reference_names,
     session,
     tester_id,
     omics_type,
@@ -1171,7 +2040,7 @@ def save_dash_upload(
 
         upload_type = "fastq"
 
-    else:
+    elif triggered == "metadata-upload":
         contents = (
             [metadata_contents]
             if isinstance(metadata_contents, str)
@@ -1185,6 +2054,13 @@ def save_dash_upload(
         )
 
         upload_type = "metadata"
+    else:
+        contents = reference_contents or []
+        names = reference_names or []
+        if isinstance(contents, str):
+            contents = [contents]
+            names = [names]
+        upload_type = "reference"
 
     saved = []
 
@@ -1253,6 +2129,51 @@ def show_uploaded_files(_, __, search, category_filter, session, tester_id, omic
 
 
 @app.callback(
+    Output("reference-mode-dropdown", "value"),
+    Output("reference-bundle-input", "value"),
+    Output("genome-fasta-input", "value"),
+    Output("gtf-input", "value"),
+    Output("transcriptome-fasta-input", "value"),
+    Output("tx2gene-input", "value"),
+    Input("upload-message", "children"),
+    Input("project-select", "value"),
+    State("tester-select", "value"),
+    State("omics-select", "value"),
+    State("reference-mode-dropdown", "value"),
+    State("reference-bundle-input", "value"),
+    State("genome-fasta-input", "value"),
+    State("gtf-input", "value"),
+    State("transcriptome-fasta-input", "value"),
+    State("tx2gene-input", "value"),
+)
+def autofill_reference_inputs(
+    _,
+    project_id,
+    tester_id,
+    omics_type,
+    current_mode,
+    current_bundle,
+    current_genome,
+    current_gtf,
+    current_transcriptome,
+    current_tx2gene,
+):
+    if not tester_id or not project_id:
+        raise PreventUpdate
+    inferred = infer_reference_inputs_from_uploads(tester_id, omics_type or "bulk_rnaseq", project_id)
+    if not any(inferred.values()):
+        raise PreventUpdate
+    return (
+        "custom_reference" if any(inferred.get(key) for key in ("genome_fasta", "gtf", "transcriptome_fasta", "tx2gene")) else current_mode,
+        current_bundle or inferred["reference_bundle"],
+        current_genome or inferred["genome_fasta"],
+        current_gtf or inferred["gtf"],
+        current_transcriptome or inferred["transcriptome_fasta"],
+        current_tx2gene or inferred["tx2gene"],
+    )
+
+
+@app.callback(
     Output("selected-step-details", "children"),
     Input("workflow-select", "value"),
     Input("omics-select", "value"),
@@ -1294,6 +2215,27 @@ def show_step(workflow_id, omics_type, tester_id, project_id):
     State("trim-front-r2-input", "value"),
     State("cutadapt-error-rate-input", "value"),
     State("cutadapt-minimum-overlap-input", "value"),
+    State("reference-mode-dropdown", "value"),
+    State("reference-bundle-input", "value"),
+    State("selected-route-dropdown", "value"),
+    State("organism-input", "value"),
+    State("genome-build-input", "value"),
+    State("genome-fasta-input", "value"),
+    State("gtf-input", "value"),
+    State("transcriptome-fasta-input", "value"),
+    State("tx2gene-input", "value"),
+    State("strandedness-method-dropdown", "value"),
+    State("salmon-index-input", "value"),
+    State("strandedness-inference-reads-input", "value"),
+    State("existing-bam-input", "value"),
+    State("star-index-input", "value"),
+    State("hisat2-index-input", "value"),
+    State("rseqc-ref-bed-input", "value"),
+    State("rseqc-stranded-threshold-input", "value"),
+    State("manual-strandedness-dropdown", "value"),
+    State("execution-profile-dropdown", "value"),
+    State("trim-input-mode", "value"),
+    State("trim-manifest-select", "value"),
     State("current-session", "data"),
     State("tester-select", "value"),
     State("omics-select", "value"),
@@ -1318,6 +2260,27 @@ def run_selected_step(
     trim_front_r2,
     cutadapt_error_rate,
     cutadapt_minimum_overlap,
+    reference_mode,
+    reference_bundle,
+    selected_route,
+    organism,
+    genome_build,
+    genome_fasta,
+    gtf,
+    transcriptome_fasta,
+    tx2gene,
+    strandedness_method,
+    salmon_index,
+    strandedness_inference_reads,
+    existing_bam,
+    star_index,
+    hisat2_index,
+    rseqc_ref_bed,
+    rseqc_stranded_threshold,
+    manual_strandedness,
+    execution_profile,
+    trim_input_mode,
+    trim_manifest,
     session,
     tester_id,
     omics_type,
@@ -1350,8 +2313,26 @@ def run_selected_step(
         selected_files = selected_files_by_category(selected_file_paths or [], tester_id, omics_type, project_id)
     except ValueError as exc:
         return current_job, dbc.Alert(str(exc), color="danger")
-    if not selected_files["fastq"]:
-        return current_job, dbc.Alert("Select at least one FASTQ file for bulk RNA-seq workflows.", color="danger")
+
+    is_strandedness_only = workflow_is_strandedness_only(workflow_id)
+    uses_existing_trimmed_reads = workflow_uses_existing_trimmed_reads(workflow_id)
+    trim_input_mode = trim_input_mode or "previous_manifest"
+    if uses_existing_trimmed_reads and trim_input_mode == "previous_manifest":
+        if not trim_manifest:
+            return current_job, dbc.Alert("Select a previous trim manifest for this atomic workflow.", color="danger")
+        manifest_options = workflow_service.trim_manifest_options(session_id, tester_id, omics_type, project_id)
+        if trim_manifest not in {item["value"] for item in manifest_options}:
+            return current_job, dbc.Alert("Selected trim manifest is not from this student/project workspace.", color="danger")
+        manifest_errors = workflow_service.validate_trim_manifest(trim_manifest)
+        if manifest_errors:
+            return current_job, dbc.Alert(html.Ul([html.Li(error) for error in manifest_errors], className="mb-0"), color="danger")
+    else:
+        if workflow_needs_fastq_input(workflow_id) and not selected_files["fastq"]:
+            return current_job, dbc.Alert("Select at least one FASTQ file for this workflow.", color="danger")
+        if uses_existing_trimmed_reads:
+            pair_errors = workflow_service.validate_fastq_pairs(selected_files["fastq"])
+            if pair_errors:
+                return current_job, dbc.Alert(html.Ul([html.Li(error) for error in pair_errors], className="mb-0"), color="danger")
 
     params = {
         "quality_threshold": quality_threshold,
@@ -1367,9 +2348,32 @@ def run_selected_step(
         "trim_front_r2": trim_front_r2,
         "cutadapt_error_rate": cutadapt_error_rate,
         "cutadapt_minimum_overlap": cutadapt_minimum_overlap,
+        "reference_mode": reference_mode,
+        "reference_bundle": reference_bundle,
+        "selected_route": selected_route,
+        "organism": organism,
+        "genome_build": genome_build,
+        "genome_fasta": genome_fasta,
+        "gtf": gtf,
+        "transcriptome_fasta": transcriptome_fasta,
+        "tx2gene": tx2gene,
+        "strandedness_method": strandedness_method,
+        "salmon_index": salmon_index,
+        "strandedness_inference_reads": strandedness_inference_reads,
+        "existing_bam": existing_bam,
+        "star_index": star_index,
+        "hisat2_index": hisat2_index,
+        "rseqc_ref_bed": rseqc_ref_bed,
+        "rseqc_stranded_threshold": rseqc_stranded_threshold,
+        "manual_strandedness": None if manual_strandedness == "pending" else manual_strandedness,
+        "strandedness_approval_status": "overridden" if manual_strandedness not in {None, "pending"} else "pending",
+        "execution_profile": execution_profile or "local",
+        "trim_input_mode": trim_input_mode,
+        "trim_manifest": trim_manifest if uses_existing_trimmed_reads and trim_input_mode == "previous_manifest" else None,
     }
     params = {key: normalize_empty(value) for key, value in params.items()}
     params = resolve_cutadapt_defaults(params)
+    params = resolve_reference_defaults(params)
     execution_profile, profile_message = resolve_execution_profile(params)
     params["execution_profile"] = execution_profile
     params["workflow_id"] = workflow_id
@@ -1462,7 +2466,15 @@ def refresh_job(_, current_job, session, tester_id, omics_type, project_id):
         else ""
     )
 
-    files = workflow_service.output_files(job["job_id"])
+    record = workflow_service.execution_record(job["job_id"], refresh=False)
+    nextflow_log_raw = record.get("nextflow_log_path")
+    nextflow_log_path = Path(nextflow_log_raw) if nextflow_log_raw else None
+    nextflow_log = (
+        nextflow_log_path.read_text(errors="replace")[-4000:]
+        if nextflow_log_path and nextflow_log_path.exists() and nextflow_log_path.is_file()
+        else ""
+    )
+    files = record.get("all_result_files") or workflow_service.output_files(job["job_id"])
 
     output_links = [
         html.Li(
@@ -1517,6 +2529,28 @@ def refresh_job(_, current_job, session, tester_id, omics_type, project_id):
     metadata = json.loads(job.get("metadata_json") or "{}")
     submitted_params = metadata.get("submitted_params", {})
     selected_files = metadata.get("selected_files", {})
+    failed_steps = [
+        step for step in record.get("step_outputs", [])
+        if str(step.get("status", "")).lower() == "failed"
+    ]
+    error_summary = None
+    if failed_steps:
+        error_items = []
+        for step in failed_steps:
+            task = (step.get("tasks") or [{}])[0]
+            tail = task.get("stderr_tail") or task.get("log_tail") or "No task stderr captured."
+            error_items.append(
+                html.Li(
+                    [
+                        html.Strong(step.get("process_name")),
+                        f": {tail[-500:]}",
+                    ]
+                )
+            )
+        error_summary = dbc.Alert(
+            [html.Strong("Failed process summary"), html.Ul(error_items, className="mb-0")],
+            color="danger",
+        )
 
     running_loader = (
         dbc.Alert(
@@ -1545,12 +2579,23 @@ def refresh_job(_, current_job, session, tester_id, omics_type, project_id):
                 html.P([html.Strong("Omics type: "), omics_label(job.get("omics_type"))]),
                 html.P([html.Strong("Project: "), job.get("project_label") or job.get("project_id")]),
                 html.P([html.Strong("Workflow: "), steps_by_id.get(job.get("workflow_id"), {}).get("label", job.get("workflow_id"))]),
+                error_summary,
+                workflow_plan_component(record, session_id, tester_id, omics_type, project_id),
                 run_parameter_summary(submitted_params),
+                strandedness_result_summary(files)
+                if submitted_params.get("strandedness_method") or any(path.endswith(".strandedness_call.json") for path in files)
+                else None,
                 selected_file_summary(selected_files),
             ]
         ),
-        f"STDOUT\n{stdout}\n\nSTDERR\n{stderr}",
-        html.Ul(output_links),
+        html.Div(
+            [
+                log_block("STDOUT", stdout),
+                log_block("STDERR", stderr),
+                log_block("Nextflow log", nextflow_log),
+            ]
+        ),
+        html.Div([workflow_plan_component(record, session_id, tester_id, omics_type, project_id), html.H6("Output files"), html.Ul(output_links)]),
     )   
 
 

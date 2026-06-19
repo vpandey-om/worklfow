@@ -7,9 +7,22 @@ omics_types:
       - fastq
       - metadata
     workflows:
+      - reference_only
       - fastq_qc
       - trim_only
+      - post_trim_qc_only
+      - strandedness_only
+      - salmon_quant_only
+      - star_align_only
+      - hisat2_align_only
       - qc_trim
+      - qc_trim_strandedness
+      - salmon_count_matrix
+      - star_count_matrix
+      - hisat2_alignment_route
+      - hisat2_featurecounts_route
+      - hisat2_htseq_route
+      - star_htseq_route
     message: Bulk RNA-seq preprocessing is currently active for testing.
 
   genomics:

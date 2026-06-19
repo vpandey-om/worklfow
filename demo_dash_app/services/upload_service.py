@@ -9,7 +9,26 @@ from werkzeug.utils import secure_filename
 
 ALLOWED_FASTQ_EXTENSIONS = (".fastq", ".fastq.gz", ".fq", ".fq.gz")
 ALLOWED_METADATA_EXTENSIONS = (".csv", ".tsv", ".xlsx")
-ALLOWED_UPLOAD_TYPES = {"fastq", "metadata", "other"}
+ALLOWED_REFERENCE_EXTENSIONS = (
+    ".fa",
+    ".fasta",
+    ".fa.gz",
+    ".fasta.gz",
+    ".gtf",
+    ".gtf.gz",
+    ".gff",
+    ".gff3",
+    ".gff.gz",
+    ".gff3.gz",
+    ".tsv",
+    ".csv",
+    ".json",
+    ".zip",
+    ".tar",
+    ".tar.gz",
+    ".tgz",
+)
+ALLOWED_UPLOAD_TYPES = {"fastq", "metadata", "reference", "other"}
 
 
 def safe_session_id(session_id: str) -> str:
@@ -37,7 +56,14 @@ def has_allowed_extension(filename: str, upload_type: str) -> bool:
     if upload_type == "other":
         return True
     lower = filename.lower()
-    allowed = ALLOWED_FASTQ_EXTENSIONS if upload_type == "fastq" else ALLOWED_METADATA_EXTENSIONS
+    if upload_type == "fastq":
+        allowed = ALLOWED_FASTQ_EXTENSIONS
+    elif upload_type == "metadata":
+        allowed = ALLOWED_METADATA_EXTENSIONS
+    elif upload_type == "reference":
+        allowed = ALLOWED_REFERENCE_EXTENSIONS
+    else:
+        return False
     return lower.endswith(allowed)
 
 
@@ -72,7 +98,7 @@ class UploadService:
         project_id: str | None = None,
     ) -> Path:
         if upload_type not in ALLOWED_UPLOAD_TYPES:
-            raise ValueError("upload_type must be fastq, metadata, or other")
+            raise ValueError("upload_type must be fastq, metadata, reference, or other")
         path = self.session_dir(session_id, tester_id, omics_type, project_id) / upload_type
         path.mkdir(parents=True, exist_ok=True)
         return path
@@ -180,9 +206,10 @@ class UploadService:
             "project_id": safe_slug(project_id or "demo_project") if tester_id and omics_type else None,
             "fastq": [],
             "metadata": [],
+            "reference": [],
             "other": [],
         }
-        for upload_type in ("fastq", "metadata", "other"):
+        for upload_type in ("fastq", "metadata", "reference", "other"):
             folder = session / upload_type
             if not folder.exists():
                 continue
@@ -208,12 +235,13 @@ class UploadService:
             "project_id": project,
             "fastq": [],
             "metadata": [],
+            "reference": [],
             "other": [],
         }
         if not workspace.exists():
             return result
         for session_dir in sorted(path for path in workspace.iterdir() if path.is_dir()):
-            for upload_type in ("fastq", "metadata", "other"):
+            for upload_type in ("fastq", "metadata", "reference", "other"):
                 folder = session_dir / upload_type
                 if not folder.exists():
                     continue

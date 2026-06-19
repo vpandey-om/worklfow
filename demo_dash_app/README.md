@@ -227,6 +227,16 @@ Advanced options are collapsed by default and include tool selection, polyX trim
 
 The default trimming tool is `fastp`. `cutadapt` is available for exact adapter handling, but the builder rejects Cutadapt runs early unless the required adapter sequence fields are provided. Dash still launches runs through the existing SurvOm builder and Nextflow path; it does not call fastp or Cutadapt directly.
 
+When local `cutadapt` is unavailable, Dash can submit Cutadapt runs with the `local_docker` execution profile. Keep the known-good container images in `survom-pipelines/registry/steps.yaml` unless deliberately migrating runtimes:
+
+```text
+FASTQC   quay.io/biocontainers/fastqc:0.12.1--hdfd78af_0
+FASTP    quay.io/biocontainers/fastp:0.23.4--h5f740d0_0
+CUTADAPT quay.io/biocontainers/cutadapt:5.1--py312h0fa9677_0
+```
+
+The old `biocontainers/fastqc:v0.12.1_cv4` and `cutadapt:5.1--py313...` tags failed at runtime and should not be restored.
+
 ## Production FASTQ Uploads
 
 The current app uses native Dash upload boxes so the teaching demo can run immediately. For production 5-50 GB FASTQ uploads, use the tus plan in:
