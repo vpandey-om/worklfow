@@ -1,0 +1,10 @@
+tmux new -s survom-student
+cd /data/shared/vikash/mult-omics-student/demo_dash_app
+SURVOM_DASH_PORT=8056 /home/vikash/miniconda3/envs/survom-preprocess/bin/python app.py
+
+
+Ctrl+b then d
+
+mux attach -t survom-student
+
+tmux ls 

@@ -1,0 +1,47 @@
+{% if params.get('trim_manifest') and 'rnaseq_04_adapter_quality_trimming' not in request.selected_steps %}
+    def trim_manifest_path = file(params.trim_manifest, checkIfExists: true)
+    def trim_manifest_dir = trim_manifest_path.parent
+    Channel
+        .fromPath(trim_manifest_path)
+        .splitCsv(header: true, sep: '\t')
+        .map { row ->
+            def row_single_end = row.single_end != null ? row.single_end.toString().toLowerCase() : ''
+            def layout = row.library_layout ?: (row_single_end in ['true', '1', 'yes'] ? 'single' : 'paired')
+            def meta = [
+                id: row.sample_id,
+                single_end: row_single_end ? row_single_end in ['true', '1', 'yes'] : layout == 'single',
+                strandedness: row.strandedness ?: 'unknown',
+                platform: row.platform ?: 'unknown'
+            ]
+            def fastq1 = row.fastq_1.startsWith('/') ? row.fastq_1 : "${trim_manifest_dir}/${row.fastq_1}"
+            def fastq2 = row.fastq_2 ? (row.fastq_2.startsWith('/') ? row.fastq_2 : "${trim_manifest_dir}/${row.fastq_2}") : ''
+            def reads = meta.single_end ? [ file(fastq1, checkIfExists: true) ] : [ file(fastq1, checkIfExists: true), file(fastq2, checkIfExists: true) ]
+            tuple(meta, reads)
+        }
+        .set { ch_trimmed_reads }
+{% else %}
+    Channel
+        .fromPath(params.input)
+        .splitCsv(header: true, sep: params.input.toString().endsWith('.tsv') ? '\t' : ',')
+        .map { row ->
+            def row_single_end = row.single_end != null ? row.single_end.toString().toLowerCase() : ''
+            def layout = row.library_layout ?: (row_single_end in ['true', '1', 'yes'] ? 'single' : 'paired')
+            def meta = [
+                id: row.sample_id,
+                single_end: row_single_end ? row_single_end in ['true', '1', 'yes'] : layout == 'single',
+                strandedness: row.strandedness ?: 'unknown',
+                platform: row.platform ?: 'unknown'
+            ]
+            def reads = meta.single_end ? [ file(row.fastq_1, checkIfExists: true) ] : [ file(row.fastq_1, checkIfExists: true), file(row.fastq_2, checkIfExists: true) ]
+            tuple(meta, reads)
+        }
+        .set { ch_reads }
+{% if (
+    'rnaseq_05_post_trim_quality_control' in request.selected_steps
+    or 'rnaseq_06_strandedness_inference' in request.selected_steps
+    or 'rnaseq_07_salmon_quantification' in request.selected_steps
+    or 'rnaseq_09_star_alignment' in request.selected_steps
+) and 'rnaseq_04_adapter_quality_trimming' not in request.selected_steps %}
+    ch_trimmed_reads = ch_reads
+{% endif %}
+{% endif %}

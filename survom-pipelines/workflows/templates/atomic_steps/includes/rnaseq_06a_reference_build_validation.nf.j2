@@ -1,0 +1,10 @@
+include { REFERENCE_VALIDATE } from '../../../modules/rnaseq/reference_validate/main'
+{% if params.get('selected_route') in ['salmon', 'salmon_de', 'quant_only'] and not params.get('salmon_index') %}
+include { BUILD_SALMON_INDEX } from '../../../modules/rnaseq/build_salmon_index/main'
+{% endif %}
+{% if params.get('selected_route') in ['star', 'star_de', 'alignment_only'] and not params.get('star_index') %}
+include { BUILD_STAR_INDEX } from '../../../modules/rnaseq/build_star_index/main'
+{% endif %}
+{% if params.get('selected_route') in ['hisat2', 'hisat2_align'] and not params.get('hisat2_index') %}
+include { BUILD_HISAT2_INDEX } from '../../../modules/reference/hisat2_index/main'
+{% endif %}

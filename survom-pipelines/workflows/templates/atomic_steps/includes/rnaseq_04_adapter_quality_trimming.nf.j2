@@ -1,0 +1,5 @@
+{% if params.get('trimming_tool') == 'cutadapt' %}
+include { CUTADAPT } from '../../../modules/common/cutadapt/main'
+{% else %}
+include { FASTP } from '../../../modules/common/fastp/main'
+{% endif %}

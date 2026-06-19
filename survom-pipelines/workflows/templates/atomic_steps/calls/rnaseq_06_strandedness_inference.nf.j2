@@ -1,0 +1,17 @@
+{% if params.get('strandedness_method') == 'rseqc_validation' %}
+{% if params.get('existing_bam') %}
+    Channel
+        .fromPath(params.existing_bam)
+        .map { bam ->
+            def sample_id = bam.baseName.replaceFirst(/\\.Aligned\\.sortedByCoord\\.out$/, '').replaceFirst(/\\.bam$/, '')
+            tuple([id: sample_id, single_end: false, platform: 'unknown'], bam)
+        }
+        .set { ch_strandedness_bam }
+{% else %}
+    STAR_ALIGN(ch_trimmed_reads, reference_star_index)
+    ch_strandedness_bam = STAR_ALIGN.out.bam
+{% endif %}
+    RSEQC_INFER_EXPERIMENT(ch_strandedness_bam)
+{% else %}
+    SALMON_STRANDEDNESS_INFERENCE(ch_trimmed_reads, reference_salmon_index)
+{% endif %}

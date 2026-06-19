@@ -1,5 +1,6 @@
 import argparse
 import json
+import sys
 from pathlib import Path
 
 from .compiler import NextflowCompiler
@@ -120,7 +121,11 @@ def main():
 
     args = parser.parse_args()
     if args.command in {"compile", "build-run"}:
-        out = compile_request(args.request, args.output)
+        try:
+            out = compile_request(args.request, args.output)
+        except Exception as exc:
+            print(str(exc), file=sys.stderr)
+            raise SystemExit(1)
         print(json.dumps({"compiled_dir": str(out)}, indent=2))
     elif args.command == "run":
         proc = run_nextflow(args.compiled_dir, args.profile)

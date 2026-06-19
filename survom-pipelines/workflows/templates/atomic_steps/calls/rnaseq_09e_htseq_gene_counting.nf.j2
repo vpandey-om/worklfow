@@ -1,0 +1,10 @@
+{% if 'rnaseq_09b_bam_sort_index' in request.selected_steps %}
+    ch_htseq_alignments = BAM_SORT_INDEX.out.bam.map { meta, bam -> bam }.collect()
+{% elif 'rnaseq_09_star_alignment' in request.selected_steps %}
+    ch_htseq_alignments = STAR_ALIGN_COUNTS.out.bam.map { meta, bam -> bam }.collect()
+{% elif 'rnaseq_09d_hisat2_alignment' in request.selected_steps %}
+    ch_htseq_alignments = HISAT2_ALIGN.out.sam.map { meta, sam -> sam }.collect()
+{% else %}
+    ch_htseq_alignments = Channel.empty()
+{% endif %}
+    HTSEQ_COUNT(ch_htseq_alignments, file(params.gtf, checkIfExists: true))

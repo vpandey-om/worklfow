@@ -1,0 +1,6 @@
+{
+  "label": "Demo RNA-seq test reference",
+  "organism": "demo",
+  "genome_build": "demo_build",
+  "note": "Tiny reference for testing workflow execution only. Not biologically complete."
+}

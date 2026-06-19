@@ -21,6 +21,29 @@ params {
   cutadapt_error_rate = 0.1
   cutadapt_min_overlap = 3
   cutadapt_minimum_overlap = 3
+  salmon_index = null
+  strandedness_inference_reads = 1000000
+  strandedness_method = 'salmon_auto'
+  existing_bam = null
+  star_index = null
+  hisat2_index = null
+  rseqc_ref_bed = null
+  rseqc_stranded_threshold = 0.6
+  reference_mode = 'demo_reference'
+  selected_route = 'salmon'
+  organism = 'demo'
+  genome_build = 'demo_build'
+  genome_fasta = null
+  gtf = null
+  transcriptome_fasta = null
+  tx2gene = null
+  reference_manifest = null
+  trim_manifest = null
+  needs_fastq_channel = true
+  approved_library_type = null
+  inferred_library_type = null
+  featurecounts_strand = 0
+  htseq_stranded = 'no'
 }
 
 profiles {
@@ -63,7 +86,15 @@ process {
   }
 
 {% for step in steps %}
-{% if step.step_id == 'rnaseq_04_adapter_quality_trimming' and params.get('trimming_tool') == 'cutadapt' %}
+{% if step.step_id == 'rnaseq_03_raw_read_qc' %}
+  withName:FASTQC {
+    cpus = {{ step.resources.get('cpus', 4) }}
+    memory = '{{ step.resources.get('memory', '8.GB') | replace('.', ' ') }}'
+{% if step.containers %}
+    container = '{{ step.containers.get('fastqc', step.containers.get(step.default_tool)) }}'
+{% endif %}
+  }
+{% elif step.step_id == 'rnaseq_04_adapter_quality_trimming' and params.get('trimming_tool') == 'cutadapt' %}
   withName:CUTADAPT {
     cpus = {{ step.resources.get('cpus', 4) }}
     memory = '{{ step.resources.get('memory', '8.GB') | replace('.', ' ') }}'
@@ -78,6 +109,91 @@ process {
     container = '{{ step.containers.get('fastp', step.containers.get(step.default_tool)) }}'
 {% endif %}
   }
+{% elif step.step_id == 'rnaseq_06_strandedness_inference' %}
+{% if params.get('strandedness_method') == 'rseqc_validation' %}
+{% if not params.get('existing_bam') %}
+  withName:STAR_ALIGN {
+    cpus = {{ step.resources.get('cpus', 4) }}
+    memory = '32 GB'
+    container = '{{ step.containers.get('star', 'quay.io/biocontainers/star:2.7.11b--h5ca1c30_8') }}'
+  }
+{% endif %}
+  withName:RSEQC_INFER_EXPERIMENT {
+    cpus = 2
+    memory = '8 GB'
+    container = '{{ step.containers.get('rseqc', 'quay.io/biocontainers/rseqc:5.0.4--pyhdfd78af_1') }}'
+  }
+{% else %}
+  withName:SALMON_STRANDEDNESS_INFERENCE {
+    cpus = {{ step.resources.get('cpus', 4) }}
+    memory = '{{ step.resources.get('memory', '8.GB') | replace('.', ' ') }}'
+{% if step.containers %}
+    container = '{{ step.containers.get('salmon', step.containers.get(step.default_tool)) }}'
+{% endif %}
+  }
+{% endif %}
+{% elif step.step_id == 'rnaseq_06a_reference_build_validation' %}
+  withName:REFERENCE_VALIDATE {
+    cpus = 1
+    memory = '2 GB'
+  }
+{% if params.get('selected_route') in ['salmon', 'salmon_de', 'quant_only'] and not params.get('salmon_index') %}
+  withName:BUILD_SALMON_INDEX {
+    cpus = {{ step.resources.get('cpus', 4) }}
+    memory = '{{ step.resources.get('memory', '8.GB') | replace('.', ' ') }}'
+    container = '{{ step.containers.get('salmon', 'quay.io/biocontainers/salmon:1.10.3--h6dccd9a_2') }}'
+  }
+{% endif %}
+{% if params.get('selected_route') in ['star', 'star_de', 'alignment_only'] and not params.get('star_index') %}
+  withName:BUILD_STAR_INDEX {
+    cpus = {{ step.resources.get('cpus', 4) }}
+    memory = '{{ step.resources.get('memory', '8.GB') | replace('.', ' ') }}'
+    container = '{{ step.containers.get('star', 'quay.io/biocontainers/star:2.7.11b--h5ca1c30_8') }}'
+  }
+{% endif %}
+{% if params.get('selected_route') in ['hisat2', 'hisat2_align'] and not params.get('hisat2_index') %}
+  withName:BUILD_HISAT2_INDEX {
+    cpus = {{ step.resources.get('cpus', 4) }}
+    memory = '{{ step.resources.get('memory', '8.GB') | replace('.', ' ') }}'
+    container = '{{ step.containers.get('hisat2', 'quay.io/biocontainers/hisat2:2.2.1--hdbdd923_6') }}'
+  }
+{% endif %}
+{% elif step.step_id == 'rnaseq_07_salmon_quantification' %}
+  withName:SALMON {
+    cpus = {{ step.resources.get('cpus', 4) }}
+    memory = '{{ step.resources.get('memory', '8.GB') | replace('.', ' ') }}'
+    container = '{{ step.containers.get('salmon', 'quay.io/biocontainers/salmon:1.10.3--h6dccd9a_2') }}'
+  }
+{% elif step.step_id == 'rnaseq_09_star_alignment' %}
+  withName:STAR_ALIGN_COUNTS {
+    cpus = {{ step.resources.get('cpus', 8) }}
+    memory = '{{ step.resources.get('memory', '32.GB') | replace('.', ' ') }}'
+    container = '{{ step.containers.get('star', 'quay.io/biocontainers/star:2.7.11b--h5ca1c30_8') }}'
+  }
+{% elif step.step_id == 'rnaseq_09d_hisat2_alignment' %}
+  withName:HISAT2_ALIGN {
+    cpus = {{ step.resources.get('cpus', 8) }}
+    memory = '{{ step.resources.get('memory', '16.GB') | replace('.', ' ') }}'
+    container = '{{ step.containers.get('hisat2', 'quay.io/biocontainers/hisat2:2.2.1--hdbdd923_6') }}'
+  }
+{% elif step.step_id == 'rnaseq_09b_bam_sort_index' %}
+  withName:BAM_SORT_INDEX {
+    cpus = {{ step.resources.get('cpus', 4) }}
+    memory = '{{ step.resources.get('memory', '8.GB') | replace('.', ' ') }}'
+    container = '{{ step.containers.get('samtools', 'quay.io/biocontainers/samtools:1.20--h50ea8bc_1') }}'
+  }
+{% elif step.step_id == 'rnaseq_09c_featurecounts_gene_counting' %}
+  withName:FEATURECOUNTS {
+    cpus = {{ step.resources.get('cpus', 4) }}
+    memory = '{{ step.resources.get('memory', '8.GB') | replace('.', ' ') }}'
+    container = '{{ step.containers.get('subread', 'quay.io/biocontainers/subread:2.0.6--he4a0461_2') }}'
+  }
+{% elif step.step_id == 'rnaseq_09e_htseq_gene_counting' %}
+  withName:HTSEQ_COUNT {
+    cpus = {{ step.resources.get('cpus', 2) }}
+    memory = '{{ step.resources.get('memory', '4.GB') | replace('.', ' ') }}'
+    container = '{{ step.containers.get('htseq', 'quay.io/biocontainers/htseq:2.0.5--py311hc1104ee_4') }}'
+  }
 {% else %}
   withName:{{ step.process_name }} {
     cpus = {{ step.resources.get('cpus', 4) }}
@@ -88,9 +204,10 @@ process {
   }
 {% endif %}
 {% endfor %}
-
+{% if 'rnaseq_04_adapter_quality_trimming' in request.selected_steps %}
   withName:MAKE_PREPROCESS_MANIFEST {
     cpus = 1
     memory = '2 GB'
   }
+{% endif %}
 }

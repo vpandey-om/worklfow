@@ -1,0 +1,3 @@
+demo_chr1	demo	gene	1	16	.	+	.	gene_id "demo_gene1"; gene_name "demo_gene1";
+demo_chr1	demo	transcript	1	16	.	+	.	gene_id "demo_gene1"; transcript_id "demo_tx1";
+demo_chr1	demo	exon	1	16	.	+	.	gene_id "demo_gene1"; transcript_id "demo_tx1";

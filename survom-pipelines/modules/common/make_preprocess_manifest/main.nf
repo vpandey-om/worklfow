@@ -13,8 +13,10 @@ process MAKE_PREPROCESS_MANIFEST {
     def read_list = reads instanceof List ? reads : [reads]
     def fastq1 = read_list[0]?.name ?: ''
     def fastq2 = read_list.size() > 1 ? read_list[1].name : ''
+    def single_end = meta.single_end ? 'true' : 'false'
+    def strandedness = params.approved_library_type ?: params.inferred_library_type ?: 'unknown'
     """
-    printf "${meta.id}\t%s\t%s\t%s\n" "${meta.single_end ? 'single' : 'paired'}" "${fastq1}" "${fastq2}" > ${meta.id}.trimmed_fastq_manifest.tsv
+    printf "${meta.id}\t%s\t%s\t%s\t%s\n" "${fastq1}" "${fastq2}" "${single_end}" "${strandedness}" > ${meta.id}.trimmed_fastq_manifest.tsv
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":
@@ -33,12 +35,14 @@ process MERGE_PREPROCESS_MANIFEST {
 
     output:
     path "trimmed_fastq_manifest.tsv", emit: manifest
+    path "trim_manifest.tsv", emit: trim_manifest
     path "versions.yml", emit: versions
 
     script:
     """
-    printf "sample_id\tlibrary_layout\tfastq_1\tfastq_2\n" > trimmed_fastq_manifest.tsv
+    printf "sample_id\tfastq_1\tfastq_2\tsingle_end\tstrandedness\n" > trimmed_fastq_manifest.tsv
     cat ${fragments} >> trimmed_fastq_manifest.tsv
+    cp trimmed_fastq_manifest.tsv trim_manifest.tsv
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":

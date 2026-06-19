@@ -1,0 +1,14 @@
+nextflow.enable.dsl = 2
+
+{% include 'atomic_steps/includes/' ~ step.step_id ~ '.nf.j2' ignore missing %}
+{% if step.step_id == 'rnaseq_04_adapter_quality_trimming' %}
+include { MAKE_PREPROCESS_MANIFEST; MERGE_PREPROCESS_MANIFEST } from '../../../modules/common/make_preprocess_manifest/main'
+{% endif %}
+
+workflow {
+{% if params.get('needs_fastq_channel') %}
+{% include 'atomic_steps/channels.nf.j2' %}
+{% endif %}
+
+{% include 'atomic_steps/calls/' ~ step.step_id ~ '.nf.j2' ignore missing %}
+}

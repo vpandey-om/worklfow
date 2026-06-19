@@ -70,6 +70,7 @@ class RunRequest(BaseModel):
     input: str
     outdir: str
     selected_steps: list[str]
+    selected_files: dict[str, list[str]] = Field(default_factory=dict)
     params: dict[str, Any] = Field(default_factory=dict)
     user_id: str | None = None
     dataset_id: str | None = None

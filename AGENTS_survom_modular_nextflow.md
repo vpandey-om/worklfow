@@ -24,6 +24,80 @@ When adding a new step, add it as a new registry entry and a new reusable module
 
 ---
 
+## 1.1 Known-Good RNA-seq Runtime Contract
+
+The Bulk RNA-seq demo has a verified working path for raw FastQC plus trimming. Preserve this unless the user explicitly asks for a runtime migration.
+
+Known-good behavior:
+
+- `fastp` is the default trimming tool.
+- `cutadapt` is an advanced fallback for exact adapter handling, not the default.
+- Dash may choose `local_docker` for Cutadapt when local `cutadapt` is unavailable.
+- Generated Cutadapt workflows must not emit stale `withName:FASTP` selectors.
+- Generated fastp workflows must not emit stale `withName:CUTADAPT` selectors.
+
+Known-good container tags:
+
+```text
+FASTQC   quay.io/biocontainers/fastqc:0.12.1--hdfd78af_0
+FASTP    quay.io/biocontainers/fastp:0.23.4--h5f740d0_0
+CUTADAPT quay.io/biocontainers/cutadapt:5.1--py312h0fa9677_0
+```
+
+Do not replace these with old Docker Hub tags or guessed Biocontainers tags. Before changing any runtime image, verify it with `docker pull` and compile both:
+
+```text
+qc_trim with trimming_tool: fastp
+qc_trim with trimming_tool: cutadapt
+```
+
+The previously broken tags were:
+
+```text
+biocontainers/fastqc:v0.12.1_cv4
+quay.io/biocontainers/cutadapt:5.1--py313h1a76870_0
+```
+
+Do not reintroduce them.
+
+---
+
+## 1.2 Atomic Dynamic Workflow Contract
+
+The RNA-seq Dash app must build workflows by chaining atomic step IDs, not by hard-coding one full RNA-seq script.
+
+Source of truth:
+
+```text
+demo_dash_app/config/workflow_steps.yaml -> user-facing workflow chains
+survom-pipelines/registry/steps.yaml     -> atomic scientific step contracts
+survom-pipelines/workflows/templates/*   -> conditional Nextflow wiring
+```
+
+Rules:
+
+- Add a new workflow by adding or changing `selected_steps` in `workflow_steps.yaml`.
+- Add a new scientific operation as its own registry step plus one small DSL2 module.
+- Keep Dash workflow IDs like `qc_trim`, `qc_trim_strandedness`, `salmon_count_matrix`, and `star_count_matrix` as chain definitions only.
+- Never emit a `withName:` selector unless the matching process is included in generated `main.nf`.
+- Reference validation must run before Salmon quantification or STAR-based counting.
+- Post-trim QC must consume trimmed FASTQ, not raw FASTQ.
+- Salmon strandedness inference is the default after post-trim QC; STAR/RSeQC is fallback or validation.
+- Demo references are for compile/workflow-shape testing only unless real indexes are provided or built.
+
+Minimal compile matrix after chain changes:
+
+```text
+fastq_qc
+trim_only
+qc_trim
+qc_trim_strandedness
+salmon_count_matrix
+star_count_matrix
+```
+
+---
+
 ## 2. Non-Negotiable Rules
 
 ### Do not delete or rename working contracts
@@ -203,7 +277,7 @@ Completion checklist:
 [ ] input tuple contract is documented
 [ ] output emits match registry
 [ ] versions.yml emitted
-[ ] container configured in nextflow.config
+[ ] container configured in nextflow.config using the known-good runtime tags above
 [ ] works for local profile
 [ ] works for docker profile
 [ ] compatible with AWS Batch profile
@@ -311,6 +385,8 @@ Completion checklist:
 [ ] raw QC-only workflow generated
 [ ] trimming-only workflow generated
 [ ] raw QC + trimming workflow generated
+[ ] fastp workflow includes FASTP config and no stale CUTADAPT selector
+[ ] Cutadapt workflow includes CUTADAPT config and no stale FASTP selector
 [ ] params.yaml contains defaults + overrides
 [ ] source modules are not modified
 [ ] generated workflow passes nextflow syntax check

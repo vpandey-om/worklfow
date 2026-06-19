@@ -41,13 +41,9 @@ steps:
         type: file
         pattern: "03_raw_qc/fastqc/*_fastqc.zip"
         ui_visible: true
-      - name: raw_qc_summary
-        type: json
-        pattern: "03_raw_qc/raw_qc_summary.json"
-        ui_visible: true
-      - name: raw_qc_status
+      - name: raw_qc_manifest
         type: tsv
-        pattern: "03_raw_qc/raw_qc_status.tsv"
+        pattern: "03_raw_qc/fastqc/*.raw_qc_manifest.tsv"
         ui_visible: true
     parameters:
       run_raw_qc:
@@ -119,7 +115,8 @@ steps:
       - rnaseq_02_fastq_staging_integrity
     compatible_previous_outputs:
       - staged_fastq_manifest
-      - raw_qc_summary
+      - fastqc_html
+      - fastqc_zip
       - raw_fastq_files
     required_inputs:
       - name: fastq_manifest
@@ -139,6 +136,10 @@ steps:
         type: tsv
         pattern: "04_trimmed/trimmed_fastq_manifest.tsv"
         ui_visible: true
+      - name: trim_manifest
+        type: tsv
+        pattern: "04_trimmed/trim_manifest.tsv"
+        ui_visible: true
       - name: trimmed_fastq
         type: file
         pattern: "04_trimmed/*.trimmed.fastq.gz"
@@ -150,10 +151,6 @@ steps:
       - name: trimming_json
         type: json
         pattern: "04_trimmed/*.fastp.json"
-        ui_visible: true
-      - name: trimming_summary
-        type: json
-        pattern: "04_trimmed/trimming_summary.json"
         ui_visible: true
     parameters:
       run_trimming:
@@ -241,6 +238,7 @@ steps:
         - rnaseq_05_post_trim_quality_control
       allowed:
         - rnaseq_05_post_trim_quality_control
+        - rnaseq_06_strandedness_inference
         - rnaseq_07_salmon_quantification
         - rnaseq_09_star_alignment
     resources:
@@ -258,3 +256,614 @@ steps:
     chat_guidance:
       beginner: "I recommend fastp with Q20, minimum length 20, and automatic polyG handling."
       expert: "Use Cutadapt only when exact adapter grammar or older-study reproducibility is required."
+
+  rnaseq_05_post_trim_quality_control:
+    step_id: rnaseq_05_post_trim_quality_control
+    step_name: Post-trim Quality Control
+    category: COMMON
+    omics: [rnaseq, genomics, atacseq, chipseq, methylation]
+    purpose: Assess trimmed FASTQ quality before strandedness inference, quantification, or alignment.
+    module_path: modules/common/post_trim_fastqc/main.nf
+    process_name: POST_TRIM_FASTQC
+    default_tool: fastqc
+    fallback_tool: falco
+    can_run_individually: true
+    can_be_skipped: true
+    depends_on:
+      - rnaseq_04_adapter_quality_trimming
+    optional_depends_on: []
+    compatible_previous_outputs:
+      - trimmed_fastq_manifest
+      - trimmed_fastq
+    required_inputs:
+      - name: trimmed_fastq
+        type: file
+        formats: [fastq.gz, fq.gz]
+        required: true
+    outputs:
+      - name: post_trim_fastqc_html
+        type: file
+        pattern: "05_post_trim_qc/fastqc/*_fastqc.html"
+        ui_visible: true
+      - name: post_trim_fastqc_zip
+        type: file
+        pattern: "05_post_trim_qc/fastqc/*_fastqc.zip"
+        ui_visible: true
+      - name: post_trim_qc_manifest
+        type: tsv
+        pattern: "05_post_trim_qc/fastqc/*.post_trim_qc_manifest.tsv"
+        ui_visible: true
+      - name: post_trim_qc_versions
+        type: yaml
+        pattern: "05_post_trim_qc/fastqc/versions.yml"
+        ui_visible: true
+    parameters:
+      run_post_trim_qc:
+        type: boolean
+        default: true
+        exposure: user
+        ui_label: Run post-trim QC
+      threads:
+        type: integer
+        default: 4
+        exposure: internal
+    next_steps:
+      recommended:
+        - rnaseq_06a_reference_build_validation
+      allowed:
+        - rnaseq_06a_reference_build_validation
+        - rnaseq_06_strandedness_inference
+        - rnaseq_07_salmon_quantification
+        - rnaseq_09_star_alignment
+    resources:
+      cpus: 4
+      memory: 8.GB
+      time: 2.h
+    containers:
+      fastqc: quay.io/biocontainers/fastqc:0.12.1--hdfd78af_0
+      falco: quay.io/biocontainers/falco:1.3.2--h077b44d_0
+    ui:
+      card_title: Check trimmed FASTQ quality
+      card_description: Confirm adapter/quality trimming improved read quality before downstream steps.
+      mode: automated
+      expose_in_guided: true
+    chat_guidance:
+      beginner: "I will check the trimmed reads with FastQC before inferring strandedness."
+      expert: "Post-trim QC should run before strandedness inference unless a trusted QC report already exists."
+
+  rnaseq_06a_reference_build_validation:
+    step_id: rnaseq_06a_reference_build_validation
+    step_name: Reference Build / Validation
+    category: RNA_SEQ_SPECIFIC
+    omics: [rnaseq]
+    purpose: Select, build, and validate reference bundles before Salmon quantification, STAR alignment, or HISAT2 alignment.
+    module_path: modules/rnaseq/reference_validate/main.nf
+    process_name: REFERENCE_VALIDATE
+    default_tool: reference_validate
+    fallback_tool: null
+    can_run_individually: true
+    can_be_skipped: false
+    depends_on:
+      - rnaseq_05_post_trim_quality_control
+    compatible_previous_outputs:
+      - trimmed_fastq
+      - post_trim_fastqc_html
+    required_inputs:
+      - name: reference_mode
+        type: string
+        formats: [demo_reference, prebuilt_reference, custom_reference]
+        required: true
+      - name: selected_route
+        type: string
+        formats: [salmon, star, hisat2, custom]
+        required: true
+    outputs:
+      - name: validated_reference_bundle
+        type: json
+        pattern: "06A_reference/validated_reference_bundle.json"
+        ui_visible: true
+      - name: reference_manifest
+        type: tsv
+        pattern: "06A_reference/reference_manifest.tsv"
+        ui_visible: true
+      - name: reference_validation_report
+        type: txt
+        pattern: "06A_reference/reference_validation_report.txt"
+        ui_visible: true
+      - name: salmon_index
+        type: directory
+        pattern: "06A_reference/salmon_index"
+        ui_visible: true
+      - name: star_index
+        type: directory
+        pattern: "06A_reference/star_index"
+        ui_visible: true
+      - name: hisat2_index
+        type: directory
+        pattern: "06A_reference/hisat2_index"
+        ui_visible: true
+    parameters:
+      reference_mode:
+        type: enum
+        choices: [demo_reference, prebuilt_reference, custom_reference]
+        default: demo_reference
+        exposure: user
+        ui_label: Reference mode
+      selected_route:
+        type: enum
+        choices: [salmon, star, hisat2, custom]
+        default: salmon
+        exposure: user
+        ui_label: Analysis route
+      organism:
+        type: string
+        default: demo
+        exposure: user
+        ui_label: Organism
+      genome_build:
+        type: string
+        default: demo_build
+        exposure: user
+        ui_label: Genome build
+      genome_fasta:
+        type: string
+        default: null
+        exposure: user
+        ui_label: Genome FASTA
+      gtf:
+        type: string
+        default: null
+        exposure: user
+        ui_label: GTF annotation
+      transcriptome_fasta:
+        type: string
+        default: null
+        exposure: user
+        ui_label: Transcriptome FASTA
+      tx2gene:
+        type: string
+        default: null
+        exposure: user
+        ui_label: tx2gene mapping
+      salmon_index:
+        type: string
+        default: null
+        exposure: user
+        ui_label: Salmon index
+      star_index:
+        type: string
+        default: null
+        exposure: user
+        ui_label: STAR index
+      hisat2_index:
+        type: string
+        default: null
+        exposure: user
+        ui_label: HISAT2 index
+    next_steps:
+      recommended:
+        - rnaseq_06_strandedness_inference
+      allowed:
+        - rnaseq_06_strandedness_inference
+        - rnaseq_07_salmon_quantification
+        - rnaseq_09_star_alignment
+        - rnaseq_09d_hisat2_alignment
+    resources:
+      cpus: 4
+      memory: 8.GB
+      time: 4.h
+    containers:
+      salmon: quay.io/biocontainers/salmon:1.10.3--h6dccd9a_2
+      star: quay.io/biocontainers/star:2.7.11b--h5ca1c30_8
+      hisat2: quay.io/biocontainers/hisat2:2.2.1--hdbdd923_6
+    ui:
+      card_title: Build or validate reference
+      card_description: Use a demo reference, select a prebuilt bundle, or validate/upload custom FASTA/GTF/index files.
+      mode: configurable
+      expose_in_guided: true
+    chat_guidance:
+      beginner: "I will validate the selected reference bundle before strandedness inference and quantification."
+      expert: "Build missing Salmon/STAR/HISAT2 indexes only when validated prebuilt indexes are absent."
+
+  rnaseq_06_strandedness_inference:
+    step_id: rnaseq_06_strandedness_inference
+    step_name: Strandedness Inference
+    category: RNA_SEQ_SPECIFIC
+    omics: [rnaseq]
+    purpose: Infer RNA-seq library strandedness from trimmed FASTQ before downstream quantification or alignment.
+    module_path: modules/rnaseq/salmon_strandedness_infer/main.nf
+    process_name: SALMON_STRANDEDNESS_INFERENCE
+    default_tool: salmon_auto
+    fallback_tool: rseqc_infer_experiment
+    can_run_individually: true
+    can_be_skipped: false
+    depends_on:
+      - rnaseq_06a_reference_build_validation
+    optional_depends_on:
+      - rnaseq_04_adapter_quality_trimming
+    compatible_previous_outputs:
+      - trimmed_fastq_manifest
+      - trimmed_fastq
+    required_inputs:
+      - name: trimmed_fastq
+        type: file
+        formats: [fastq.gz, fq.gz]
+        required: true
+      - name: salmon_index
+        type: directory
+        formats: [salmon_index]
+        required_when: strandedness_method == salmon_auto
+      - name: rseqc_ref_bed
+        type: file
+        formats: [bed]
+        required_when: strandedness_method == rseqc_validation
+      - name: star_index
+        type: directory
+        formats: [star_index]
+        required_when: strandedness_method == rseqc_validation and existing_bam is empty
+    outputs:
+      - name: strandedness_call
+        type: json
+        pattern: "06_strandedness/*.strandedness_call.json"
+        ui_visible: true
+      - name: strandedness_evidence
+        type: tsv
+        pattern: "06_strandedness/*.strandedness_evidence.tsv"
+        ui_visible: true
+      - name: salmon_inference_log
+        type: log
+        pattern: "06_strandedness/*.salmon_inference.log"
+        ui_visible: true
+      - name: strandness_manifest
+        type: tsv
+        pattern: "06_strandedness/*.strandness_manifest.tsv"
+        ui_visible: true
+    parameters:
+      strandedness_method:
+        type: enum
+        choices: [salmon_auto, rseqc_validation]
+        default: salmon_auto
+        exposure: user
+        ui_label: Strandedness inference method
+      salmon_index:
+        type: string
+        default: null
+        exposure: user
+        ui_label: Salmon transcriptome index
+      existing_bam:
+        type: string
+        default: null
+        exposure: expert
+        ui_label: Existing sorted BAM for RSeQC validation
+      star_index:
+        type: string
+        default: null
+        exposure: expert
+        ui_label: STAR genome index for RSeQC fallback
+      rseqc_ref_bed:
+        type: string
+        default: null
+        exposure: expert
+        ui_label: RSeQC BED annotation
+      rseqc_stranded_threshold:
+        type: float
+        default: 0.6
+        min: 0.5
+        max: 0.95
+        exposure: expert
+        ui_label: RSeQC strandedness threshold
+      strandedness_inference_reads:
+        type: integer
+        default: 1000000
+        min: 10000
+        max: 5000000
+        exposure: expert
+        ui_label: Reads sampled for Salmon inference
+      inferred_library_type:
+        type: string
+        default: null
+        exposure: internal
+        ui_label: Inferred Salmon library type
+      strandedness_approval_status:
+        type: enum
+        choices: [pending, approved, overridden, needs_review]
+        default: pending
+        exposure: internal
+        ui_label: Strandedness approval status
+    next_steps:
+      recommended:
+        - rnaseq_07_salmon_quantification
+      allowed:
+        - rnaseq_07_salmon_quantification
+        - rnaseq_09_star_alignment
+    resources:
+      cpus: 4
+      memory: 8.GB
+      time: 2.h
+    containers:
+      salmon: quay.io/biocontainers/salmon:1.10.3--h6dccd9a_2
+      star: quay.io/biocontainers/star:2.7.11b--h5ca1c30_8
+      rseqc: quay.io/biocontainers/rseqc:5.0.4--pyhdfd78af_1
+    ui:
+      card_title: Infer strandedness
+      card_description: Default path uses Salmon automatic library type detection on trimmed FASTQ. RSeQC is fallback validation only.
+      mode: configurable
+      expose_in_guided: true
+      status_values: [pending, running, completed, ambiguous, failed]
+    chat_guidance:
+      beginner: "I will infer library strandedness with Salmon -l A from trimmed FASTQ before quantification."
+      expert: "Use RSeQC infer_experiment.py only when a BAM already exists, Salmon is ambiguous, or alignment-based validation is explicitly requested."
+
+  rnaseq_07_salmon_quantification:
+    step_id: rnaseq_07_salmon_quantification
+    step_name: Salmon Quantification
+    category: RNA_SEQ_SPECIFIC
+    omics: [rnaseq]
+    purpose: Quantify transcripts from trimmed FASTQ using the validated Salmon index and approved library type.
+    module_path: modules/rnaseq/salmon/main.nf
+    process_name: SALMON
+    default_tool: salmon
+    can_run_individually: true
+    depends_on: [rnaseq_06_strandedness_inference]
+    compatible_previous_outputs: [trimmed_fastq, validated_reference_bundle, strandedness_call]
+    outputs:
+      - name: salmon_quant
+        type: directory
+        pattern: "07_salmon/*/quant.sf"
+        ui_visible: true
+      - name: quant_manifest
+        type: tsv
+        pattern: "07_salmon/*.quant_manifest.tsv"
+        ui_visible: true
+    parameters:
+      approved_library_type:
+        type: string
+        default: null
+        exposure: internal
+        ui_label: Approved library type
+    next_steps:
+      recommended: [rnaseq_08_tximport_gene_summarization]
+      allowed: [rnaseq_08_tximport_gene_summarization]
+    resources: {cpus: 4, memory: 8.GB, time: 4.h}
+    containers:
+      salmon: quay.io/biocontainers/salmon:1.10.3--h6dccd9a_2
+    ui: {card_title: Salmon quantification, card_description: Fast transcript quantification from trimmed FASTQ., mode: automated, expose_in_guided: true}
+    chat_guidance:
+      beginner: "I will quantify transcripts with Salmon using the validated index and inferred strandedness."
+
+  rnaseq_08_tximport_gene_summarization:
+    step_id: rnaseq_08_tximport_gene_summarization
+    step_name: tximport Gene Summarization
+    category: RNA_SEQ_SPECIFIC
+    omics: [rnaseq]
+    purpose: Summarize Salmon transcript quantification to a gene count matrix using tx2gene.
+    module_path: modules/rnaseq/tximport/main.nf
+    process_name: TXIMPORT
+    default_tool: tximport
+    can_run_individually: false
+    depends_on: [rnaseq_07_salmon_quantification]
+    compatible_previous_outputs: [salmon_quant, tx2gene]
+    outputs:
+      - name: gene_count_matrix
+        type: tsv
+        pattern: "08_tximport/gene_count_matrix.tsv"
+        ui_visible: true
+    parameters: {}
+    next_steps:
+      recommended: [rnaseq_10_count_matrix_qc]
+      allowed: [rnaseq_10_count_matrix_qc]
+    resources: {cpus: 1, memory: 4.GB, time: 1.h}
+    containers: {}
+    ui: {card_title: tximport gene summarization, card_description: Convert transcript quantification to a gene count matrix., mode: automated, expose_in_guided: true}
+    chat_guidance:
+      beginner: "I will summarize Salmon transcript counts to gene counts with tximport."
+
+  rnaseq_09_star_alignment:
+    step_id: rnaseq_09_star_alignment
+    step_name: STAR Alignment
+    category: RNA_SEQ_SPECIFIC
+    omics: [rnaseq]
+    purpose: Align trimmed FASTQ to the genome using the validated STAR index.
+    module_path: modules/rnaseq/star/main.nf
+    process_name: STAR_ALIGN
+    default_tool: star
+    can_run_individually: true
+    depends_on: [rnaseq_06_strandedness_inference]
+    compatible_previous_outputs: [trimmed_fastq, validated_reference_bundle, strandedness_call]
+    outputs:
+      - name: bam
+        type: bam
+        pattern: "06_strandedness/star/*.Aligned.sortedByCoord.out.bam"
+        ui_visible: true
+      - name: alignment_manifest
+        type: tsv
+        pattern: "06_strandedness/star/*.alignment_manifest.tsv"
+        ui_visible: true
+    parameters: {}
+    next_steps:
+      recommended: [rnaseq_09b_bam_sort_index]
+      allowed: [rnaseq_09b_bam_sort_index]
+    resources: {cpus: 4, memory: 16.GB, time: 8.h}
+    containers:
+      star: quay.io/biocontainers/star:2.7.11b--h5ca1c30_8
+    ui: {card_title: STAR alignment, card_description: Genome alignment for gene counting., mode: automated, expose_in_guided: true}
+    chat_guidance:
+      beginner: "I will align trimmed reads with STAR using the validated genome index."
+
+  rnaseq_09d_hisat2_alignment:
+    step_id: rnaseq_09d_hisat2_alignment
+    step_name: HISAT2 Alignment
+    category: RNA_SEQ_SPECIFIC
+    omics: [rnaseq]
+    purpose: Align raw or trimmed FASTQ to the genome using a validated HISAT2 index.
+    module_path: modules/alignment/hisat2_align/main.nf
+    process_name: HISAT2_ALIGN
+    default_tool: hisat2
+    can_run_individually: true
+    depends_on: [rnaseq_06a_reference_build_validation]
+    compatible_previous_outputs: [trimmed_fastq, validated_reference_bundle]
+    required_inputs:
+      - name: fastq_manifest
+        type: tsv
+        formats: [raw_fastq_manifest, trimmed_fastq_manifest]
+        required: true
+      - name: hisat2_index
+        type: directory
+        formats: [hisat2_index]
+        required: true
+    outputs:
+      - name: sam
+        type: sam
+        pattern: "09_hisat2/*.hisat2.sam"
+        ui_visible: true
+      - name: hisat2_log
+        type: log
+        pattern: "09_hisat2/*.hisat2.log"
+        ui_visible: true
+    parameters:
+      hisat2_index:
+        type: string
+        default: null
+        exposure: user
+        ui_label: HISAT2 index
+    next_steps:
+      recommended: [rnaseq_09b_bam_sort_index]
+      allowed: [rnaseq_09b_bam_sort_index]
+    resources: {cpus: 4, memory: 16.GB, time: 6.h}
+    containers:
+      hisat2: quay.io/biocontainers/hisat2:2.2.1--hdbdd923_6
+    ui: {card_title: HISAT2 alignment, card_description: Lightweight genome alignment from FASTQ., mode: automated, expose_in_guided: true}
+    chat_guidance:
+      beginner: "I will align reads with HISAT2 using a validated HISAT2 genome index."
+
+  rnaseq_09b_bam_sort_index:
+    step_id: rnaseq_09b_bam_sort_index
+    step_name: Sort and Index BAM
+    category: RNA_SEQ_SPECIFIC
+    omics: [rnaseq]
+    purpose: Sort and index BAM files before gene counting.
+    module_path: modules/rnaseq/bam_sort_index/main.nf
+    process_name: BAM_SORT_INDEX
+    default_tool: samtools
+    can_run_individually: false
+    depends_on: [rnaseq_09_star_alignment]
+    compatible_previous_outputs: [bam]
+    outputs:
+      - name: sorted_bam
+        type: bam
+        pattern: "09_star/bam/*.sorted.bam"
+        ui_visible: true
+      - name: sorted_bam_index
+        type: bai
+        pattern: "09_star/bam/*.sorted.bam.bai"
+        ui_visible: true
+      - name: alignment_manifest
+        type: tsv
+        pattern: "09_star/bam/*.alignment_manifest.tsv"
+        ui_visible: true
+    parameters: {}
+    next_steps:
+      recommended: [rnaseq_09c_featurecounts_gene_counting]
+      allowed: [rnaseq_09c_featurecounts_gene_counting]
+    resources: {cpus: 4, memory: 8.GB, time: 2.h}
+    containers:
+      samtools: quay.io/biocontainers/samtools:1.20--h50ea8bc_1
+    ui: {card_title: Sort and index BAM, card_description: Prepare alignment files for featureCounts., mode: automated, expose_in_guided: true}
+    chat_guidance:
+      beginner: "I will sort and index the BAM before gene counting."
+
+  rnaseq_09c_featurecounts_gene_counting:
+    step_id: rnaseq_09c_featurecounts_gene_counting
+    step_name: featureCounts Gene Counting
+    category: RNA_SEQ_SPECIFIC
+    omics: [rnaseq]
+    purpose: Count reads per gene from sorted BAM files using GTF annotation and inferred strandedness.
+    module_path: modules/rnaseq/featurecounts/main.nf
+    process_name: FEATURECOUNTS
+    default_tool: featurecounts
+    can_run_individually: false
+    depends_on: []
+    compatible_previous_outputs: [sorted_bam, bam, sam, gtf, strandedness_call]
+    outputs:
+      - name: gene_count_matrix
+        type: tsv
+        pattern: "09_star/featurecounts/gene_count_matrix.tsv"
+        ui_visible: true
+    parameters:
+      featurecounts_strand:
+        type: integer
+        default: 0
+        exposure: internal
+        ui_label: featureCounts strand mode
+    next_steps:
+      recommended: [rnaseq_10_count_matrix_qc]
+      allowed: [rnaseq_10_count_matrix_qc]
+    resources: {cpus: 4, memory: 8.GB, time: 2.h}
+    containers:
+      subread: quay.io/biocontainers/subread:2.0.6--he4a0461_2
+    ui: {card_title: featureCounts gene counting, card_description: Generate a gene count matrix from sorted BAM files., mode: automated, expose_in_guided: true}
+    chat_guidance:
+      beginner: "I will count reads per gene with featureCounts."
+
+  rnaseq_09e_htseq_gene_counting:
+    step_id: rnaseq_09e_htseq_gene_counting
+    step_name: HTSeq Gene Counting
+    category: RNA_SEQ_SPECIFIC
+    omics: [rnaseq]
+    purpose: Count reads per gene from SAM/BAM alignments using HTSeq-count and GTF annotation.
+    module_path: modules/rnaseq/htseq_count/main.nf
+    process_name: HTSEQ_COUNT
+    default_tool: htseq
+    can_run_individually: true
+    depends_on: [rnaseq_09_star_alignment]
+    compatible_previous_outputs: [bam, sam, gtf]
+    outputs:
+      - name: htseq_count_matrix
+        type: tsv
+        pattern: "09_counts/htseq/htseq_count_matrix.tsv"
+        ui_visible: true
+      - name: htseq_count_status
+        type: tsv
+        pattern: "09_counts/htseq/htseq_count_status.tsv"
+        ui_visible: true
+    parameters:
+      htseq_stranded:
+        type: enum
+        choices: [yes, no, reverse]
+        default: no
+        exposure: expert
+        ui_label: HTSeq stranded mode
+    next_steps:
+      recommended: [rnaseq_10_count_matrix_qc]
+      allowed: [rnaseq_10_count_matrix_qc]
+    resources: {cpus: 2, memory: 4.GB, time: 2.h}
+    containers:
+      htseq: quay.io/biocontainers/htseq:2.0.5--py311hc1104ee_4
+    ui: {card_title: HTSeq gene counting, card_description: Generate gene counts from SAM/BAM alignments., mode: automated, expose_in_guided: true}
+    chat_guidance:
+      beginner: "I will count reads per gene with HTSeq-count."
+
+  rnaseq_10_count_matrix_qc:
+    step_id: rnaseq_10_count_matrix_qc
+    step_name: Count Matrix QC
+    category: RNA_SEQ_SPECIFIC
+    omics: [rnaseq]
+    purpose: Validate that a gene count matrix was produced for downstream analysis.
+    module_path: modules/rnaseq/count_matrix_qc/main.nf
+    process_name: COUNT_MATRIX_QC
+    default_tool: python
+    can_run_individually: false
+    depends_on: []
+    compatible_previous_outputs: [gene_count_matrix]
+    outputs:
+      - name: count_matrix_qc
+        type: json
+        pattern: "10_count_matrix_qc/count_matrix_qc.json"
+        ui_visible: true
+    parameters: {}
+    next_steps: {recommended: [], allowed: []}
+    resources: {cpus: 1, memory: 2.GB, time: 1.h}
+    containers: {}
+    ui: {card_title: Count matrix QC, card_description: Confirm count matrix availability., mode: automated, expose_in_guided: true}
+    chat_guidance:
+      beginner: "I will check that the count matrix exists."

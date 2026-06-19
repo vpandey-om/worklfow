@@ -1,0 +1,34 @@
+{% if params.get('selected_route') in ['salmon', 'salmon_de', 'quant_only'] and not params.get('salmon_index') %}
+    BUILD_SALMON_INDEX(file(params.transcriptome_fasta, checkIfExists: true))
+    reference_salmon_index = BUILD_SALMON_INDEX.out.index
+{% else %}
+    reference_salmon_index = params.salmon_index ? file(params.salmon_index, checkIfExists: true) : ''
+{% endif %}
+{% if params.get('selected_route') in ['star', 'star_de', 'alignment_only'] and not params.get('star_index') %}
+    BUILD_STAR_INDEX(
+        file(params.genome_fasta, checkIfExists: true),
+        file(params.gtf, checkIfExists: true)
+    )
+    reference_star_index = BUILD_STAR_INDEX.out.index
+{% else %}
+    reference_star_index = params.star_index ? file(params.star_index, checkIfExists: true) : ''
+{% endif %}
+{% if params.get('selected_route') in ['hisat2', 'hisat2_align'] and not params.get('hisat2_index') %}
+    BUILD_HISAT2_INDEX(file(params.genome_fasta, checkIfExists: true))
+    reference_hisat2_index = BUILD_HISAT2_INDEX.out.index
+{% else %}
+    reference_hisat2_index = params.hisat2_index ? file(params.hisat2_index, checkIfExists: true) : ''
+{% endif %}
+    REFERENCE_VALIDATE(
+        params.reference_mode,
+        params.selected_route,
+        params.organism ?: '',
+        params.genome_build ?: '',
+        params.genome_fasta ?: '',
+        params.gtf ?: '',
+        params.transcriptome_fasta ?: '',
+        params.tx2gene ?: '',
+        reference_salmon_index,
+        reference_star_index,
+        reference_hisat2_index
+    )

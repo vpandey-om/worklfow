@@ -158,6 +158,56 @@ class WorkflowPlanner:
                         "Use fastp, or provide explicit adapter sequences before selecting Cutadapt."
                     )
 
+        if "rnaseq_06_strandedness_inference" in selected_steps:
+            method = params.get("strandedness_method", "salmon_auto")
+            if method not in {"salmon_auto", "rseqc_validation"}:
+                errors.append({
+                    "param": "strandedness_method",
+                    "message": "Strandedness method must be salmon_auto or rseqc_validation.",
+                })
+            can_build_salmon_index = (
+                "rnaseq_06a_reference_build_validation" in selected_steps
+                and bool(params.get("transcriptome_fasta"))
+            )
+            if method == "salmon_auto" and not params.get("salmon_index") and not can_build_salmon_index:
+                errors.append({
+                    "param": "salmon_index",
+                    "message": "Salmon strandedness inference requires a Salmon transcriptome index path, or transcriptome_fasta so the reference step can build one.",
+                })
+                suggested_fixes.append("Provide salmon_index, or include reference build with transcriptome_fasta before running strandedness inference.")
+            if method == "rseqc_validation":
+                if not params.get("rseqc_ref_bed"):
+                    errors.append({
+                        "param": "rseqc_ref_bed",
+                        "message": "RSeQC infer_experiment.py requires a BED annotation file.",
+                    })
+                if not params.get("existing_bam") and not params.get("star_index"):
+                    errors.append({
+                        "param": "star_index",
+                        "message": "RSeQC fallback requires either an existing sorted BAM or a STAR genome index to create one.",
+                    })
+                suggested_fixes.append("Use Salmon auto by default, or provide existing_bam/rseqc_ref_bed, or star_index/rseqc_ref_bed for alignment-based validation.")
+
+        if "rnaseq_06a_reference_build_validation" in selected_steps:
+            route = params.get("selected_route", "salmon")
+            mode = params.get("reference_mode", "demo_reference")
+            if route not in {"salmon", "star", "hisat2", "custom", "salmon_de", "star_de", "quant_only", "alignment_only", "hisat2_align"}:
+                errors.append({"param": "selected_route", "message": "Route must be salmon, star, hisat2, custom, salmon_de, star_de, quant_only, alignment_only, or hisat2_align."})
+            if not params.get("organism"):
+                errors.append({"param": "organism", "message": "Reference organism metadata is required."})
+            if not params.get("genome_build"):
+                errors.append({"param": "genome_build", "message": "Reference genome_build metadata is required."})
+            salmon_route = route in {"salmon", "salmon_de", "quant_only"} or "rnaseq_07_salmon_quantification" in selected_steps
+            star_route = route in {"star", "star_de", "alignment_only"} or "rnaseq_09_star_alignment" in selected_steps
+            hisat2_route = route in {"hisat2", "hisat2_align"} or "rnaseq_09d_hisat2_alignment" in selected_steps
+            if mode != "demo_reference":
+                if salmon_route and not (params.get("transcriptome_fasta") and params.get("tx2gene")):
+                    errors.append({"param": "transcriptome_fasta", "message": "Salmon route requires transcriptome_fasta and tx2gene; salmon_index is optional if it can be built."})
+                if star_route and not (params.get("genome_fasta") and params.get("gtf")):
+                    errors.append({"param": "genome_fasta", "message": "STAR route requires genome_fasta and gtf; star_index is optional if it can be built."})
+                if hisat2_route and not params.get("genome_fasta"):
+                    errors.append({"param": "genome_fasta", "message": "HISAT2 route requires genome_fasta; hisat2_index is optional if it can be built."})
+
         return ValidationResult(
             valid=len(errors) == 0,
             errors=errors,

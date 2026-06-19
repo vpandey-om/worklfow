@@ -1,0 +1,5 @@
+{% if 'rnaseq_08_tximport_gene_summarization' in request.selected_steps %}
+    COUNT_MATRIX_QC(TXIMPORT.out.counts)
+{% elif 'rnaseq_09c_featurecounts_gene_counting' in request.selected_steps %}
+    COUNT_MATRIX_QC(FEATURECOUNTS.out.counts)
+{% endif %}

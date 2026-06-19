@@ -13,6 +13,14 @@ MISSING_CUTADAPT_MESSAGE = (
     "Cutadapt was selected but is not available in the active environment. "
     "Install cutadapt or run with a container/conda profile."
 )
+MISSING_SALMON_MESSAGE = (
+    "Salmon strandedness inference was selected but salmon is not available in the active environment. "
+    "Install salmon or run with a container/conda profile."
+)
+MISSING_RSEQC_MESSAGE = (
+    "RSeQC strandedness validation was selected but STAR/RSeQC tools are not available in the active environment. "
+    "Install STAR and RSeQC or run with a container/conda profile."
+)
 
 
 def _uses_container_profile(profile: str) -> bool:
@@ -22,9 +30,15 @@ def _uses_container_profile(profile: str) -> bool:
 
 def _validate_runtime_tools(manifest: dict, profile: str):
     params = manifest.get("params", {})
-    if params.get("trimming_tool") == "cutadapt" and not _uses_container_profile(profile):
-        if not shutil.which("cutadapt"):
-            raise RuntimeError(MISSING_CUTADAPT_MESSAGE)
+    if _uses_container_profile(profile):
+        return
+    if params.get("trimming_tool") == "cutadapt" and not shutil.which("cutadapt"):
+        raise RuntimeError(MISSING_CUTADAPT_MESSAGE)
+    if (params.get("strandedness_method") == "salmon_auto" or params.get("selected_route") == "salmon") and not shutil.which("salmon"):
+        raise RuntimeError(MISSING_SALMON_MESSAGE)
+    if params.get("strandedness_method") == "rseqc_validation":
+        if not shutil.which("infer_experiment.py") or (not params.get("existing_bam") and not shutil.which("STAR")):
+            raise RuntimeError(MISSING_RSEQC_MESSAGE)
 
 
 def run_nextflow(compiled_dir: str | Path, profile: str = "local,docker", resume: bool = True) -> subprocess.CompletedProcess:
@@ -40,6 +54,8 @@ def run_nextflow(compiled_dir: str | Path, profile: str = "local,docker", resume
         profile,
         "-params-file",
         str(compiled / "params.yaml"),
+        "-work-dir",
+        str(compiled / "work"),
     ]
     if resume:
         cmd.append("-resume")

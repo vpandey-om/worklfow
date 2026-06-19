@@ -1,0 +1,8 @@
+{% if params.get('strandedness_method') == 'rseqc_validation' %}
+{% if not params.get('existing_bam') %}
+include { STAR_ALIGN } from '../../../modules/rnaseq/star/main'
+{% endif %}
+include { RSEQC_INFER_EXPERIMENT } from '../../../modules/rnaseq/rseqc_infer_experiment/main'
+{% else %}
+include { SALMON_STRANDEDNESS_INFERENCE } from '../../../modules/rnaseq/salmon_strandedness_infer/main'
+{% endif %}

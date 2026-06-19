@@ -1,0 +1,9 @@
+{% if params.get('trimming_tool') == 'cutadapt' %}
+    CUTADAPT(ch_reads)
+    ch_trimmed_reads = CUTADAPT.out.reads
+{% else %}
+    FASTP(ch_reads)
+    ch_trimmed_reads = FASTP.out.reads
+{% endif %}
+    MAKE_PREPROCESS_MANIFEST(ch_trimmed_reads)
+    MERGE_PREPROCESS_MANIFEST(MAKE_PREPROCESS_MANIFEST.out.fragments.collect())
