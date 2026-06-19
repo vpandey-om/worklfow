@@ -28,6 +28,8 @@ demo_dash_app/uploads/
 demo_dash_app/runs/
 demo_dash_app/*.sqlite
 demo_dash_app/**/*.sqlite
+runs/
+.test-runs/
 
 # Nextflow runtime data
 survom-pipelines/work/

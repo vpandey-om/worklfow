@@ -15,6 +15,14 @@ from flask import jsonify, request, send_file
 from services.job_store import JobStore
 from services.upload_service import UploadService, safe_slug
 from services.workflow_service import WorkflowService
+from job_view import (
+    log_block,
+    process_status_badge,
+    run_parameter_summary,
+    selected_file_summary,
+    strandedness_result_summary,
+    workflow_plan_component,
+)
 
 
 APP_ROOT = Path(__file__).resolve().parent
@@ -1354,219 +1362,6 @@ def validate_run_params(
     return list(dict.fromkeys(errors))
 
 
-def run_parameter_summary(params: dict):
-    if not params:
-        return None
-    poly_x = "on" if params.get("trim_poly_x") else "off"
-    strandedness_items = []
-    reference_items = []
-    if params.get("reference_mode"):
-        reference_items = [
-            html.Li(f"Reference mode: {params.get('reference_mode')}"),
-            html.Li(f"Selected route: {params.get('selected_route') or 'salmon'}"),
-            html.Li(f"Organism/build: {params.get('organism') or 'not set'} / {params.get('genome_build') or 'not set'}"),
-        ]
-    if params.get("strandedness_method"):
-        strandedness_items = [
-            html.Li(f"Strandedness method: {params.get('strandedness_method')}"),
-            html.Li(f"Salmon index: {params.get('salmon_index') or 'not set'}"),
-            html.Li(f"Existing BAM: {params.get('existing_bam') or 'not set'}"),
-            html.Li(f"STAR index: {params.get('star_index') or 'not set'}"),
-            html.Li(f"RSeQC BED: {params.get('rseqc_ref_bed') or 'not set'}"),
-            html.Li(f"Manual strandedness: {params.get('manual_strandedness') or 'pending inference'}"),
-        ]
-    return html.Div(
-        [
-            html.H6("Run parameters", className="mt-3"),
-            html.Ul(
-                [
-                    html.Li(f"Trimming tool: {params.get('trimming_tool', 'fastp')}"),
-                    html.Li(f"Minimum base quality: Q{params.get('quality_threshold', 20)}"),
-                    html.Li(f"Minimum read length: {params.get('minimum_read_length', 20)} bp"),
-                    html.Li(f"PolyG trimming: {params.get('trim_poly_g', 'auto')}"),
-                    html.Li(f"PolyX trimming: {poly_x}"),
-                    html.Li(f"Adapter preset: {params.get('adapter_preset') or 'not used'}"),
-                    html.Li(f"Adapter source: {params.get('adapter_source') or 'not used'}"),
-                    *reference_items,
-                    *strandedness_items,
-                ],
-                className="small ps-3 mb-0",
-            ),
-        ]
-    )
-
-
-def strandedness_result_summary(files: list[str]):
-    calls = [Path(path) for path in files if path.endswith(".strandedness_call.json")]
-    if not calls:
-        return html.Div(
-            [
-                html.H6("Strandedness Inference", className="mt-3"),
-                dbc.Badge("pending", color="secondary"),
-                html.Div(
-                    "Run the strandedness workflow to infer library type before downstream quantification/alignment.",
-                    className="small text-muted mt-1",
-                ),
-            ]
-        )
-
-    items = []
-    for call_path in calls:
-        try:
-            call = json.loads(call_path.read_text())
-        except Exception as exc:
-            items.append(html.Li(f"{call_path.name}: failed to read call ({exc})"))
-            continue
-        raw_status = call.get("status", "pending")
-        display_status = "ambiguous" if raw_status == "needs_review" else raw_status
-        color = {
-            "pending": "secondary",
-            "running": "primary",
-            "completed": "success",
-            "ambiguous": "warning",
-            "failed": "danger",
-        }.get(display_status, "secondary")
-        inferred = call.get("inferred_library_type") or "not inferred"
-        items.append(
-            html.Li(
-                [
-                    html.Strong(call.get("sample_id", call_path.stem)),
-                    ": ",
-                    dbc.Badge(display_status, color=color, className="me-2"),
-                    f"inferred library type = {inferred}. ",
-                    html.Span(call.get("reason", ""), className="text-muted"),
-                ]
-            )
-        )
-    return html.Div(
-        [
-            html.H6("Strandedness Inference", className="mt-3"),
-            html.Ul(items, className="small ps-3 mb-1"),
-            html.Div(
-                "Approve the inferred type or choose an override in the Strandedness Inference panel before downstream Salmon quantification or STAR alignment.",
-                className="small text-muted",
-            ),
-        ]
-    )
-
-
-def selected_file_summary(selected_files: dict | None):
-    if not selected_files:
-        return None
-    rows = []
-    for category in ("fastq", "metadata", "other"):
-        for path in selected_files.get(category, []):
-            rows.append(html.Li(f"{category}: {Path(path).name}"))
-    if not rows:
-        return None
-    return html.Div([html.H6("Selected files", className="mt-3"), html.Ul(rows, className="small ps-3 mb-0")])
-
-
-def process_status_badge(status: str | None):
-    value = (status or "pending").lower()
-    color = {
-        "pending": "secondary",
-        "running": "primary",
-        "completed": "success",
-        "succeeded": "success",
-        "failed": "danger",
-        "error": "danger",
-    }.get(value, "secondary")
-    return dbc.Badge(value, color=color)
-
-
-def artifact_link(path: str, label: str, session_id: str, tester_id: str, omics_type: str, project_id: str):
-    if not path:
-        return None
-    return html.A(
-        label,
-        href=(
-            f"{API_PREFIX}/file?path={path}"
-            f"&session_id={session_id}&tester_id={tester_id}&omics_type={omics_type}&project_id={project_id}"
-        ),
-        target="_blank",
-        className="me-2",
-    )
-
-
-def workflow_plan_component(record: dict, session_id: str, tester_id: str, omics_type: str, project_id: str):
-    steps = record.get("step_outputs") or []
-    if not steps:
-        return html.Div("No workflow plan available yet.", className="text-muted")
-    rows = []
-    for step in steps:
-        tasks = step.get("tasks") or []
-        first_task = tasks[0] if tasks else {}
-        missing = step.get("missing_outputs") or []
-        links = [
-            artifact_link(first_task.get("stdout_path"), "stdout", session_id, tester_id, omics_type, project_id),
-            artifact_link(first_task.get("stderr_path"), "stderr", session_id, tester_id, omics_type, project_id),
-            artifact_link(first_task.get("command_log_path"), "log", session_id, tester_id, omics_type, project_id),
-        ]
-        links = [link for link in links if link]
-        outputs = sum(output.get("count", 0) for output in step.get("outputs", []))
-        missing_text = ""
-        if missing:
-            missing_text = "Missing: " + ", ".join(item.get("pattern", "") for item in missing)
-        rows.append(
-            html.Tr(
-                [
-                    html.Td(step.get("process_name")),
-                    html.Td(process_status_badge(step.get("status"))),
-                    html.Td(step.get("step_id"), className="small"),
-                    html.Td(first_task.get("work_dir") or "", className="small text-break"),
-                    html.Td(str(outputs)),
-                    html.Td(missing_text, className="small text-danger"),
-                    html.Td(links),
-                ]
-            )
-        )
-    return html.Div(
-        [
-            html.H6("Generated atomic workflow"),
-            dbc.Table(
-                [
-                    html.Thead(
-                        html.Tr(
-                            [
-                                html.Th("Process"),
-                                html.Th("Status"),
-                                html.Th("Step ID"),
-                                html.Th("Work dir"),
-                                html.Th("Outputs"),
-                                html.Th("Missing outputs"),
-                                html.Th("Logs"),
-                            ]
-                        )
-                    ),
-                    html.Tbody(rows),
-                ],
-                bordered=True,
-                hover=True,
-                responsive=True,
-                size="sm",
-            ),
-        ]
-    )
-
-
-def log_block(title: str, content: str):
-    text = content or ""
-    return html.Div(
-        [
-            html.Div(
-                [
-                    html.Strong(title),
-                    dcc.Clipboard(content=text, title=f"Copy {title}", className="ms-2"),
-                ],
-                className="d-flex align-items-center mb-1",
-            ),
-            html.Pre(text or "(empty)", className="small bg-light border rounded p-2"),
-        ],
-        className="mb-3",
-    )
-
-
 def decode_dash_upload(contents: str) -> bytes:
     if not contents or "," not in contents:
         raise ValueError("Invalid upload content")
@@ -2467,13 +2262,6 @@ def refresh_job(_, current_job, session, tester_id, omics_type, project_id):
     )
 
     record = workflow_service.execution_record(job["job_id"], refresh=False)
-    nextflow_log_raw = record.get("nextflow_log_path")
-    nextflow_log_path = Path(nextflow_log_raw) if nextflow_log_raw else None
-    nextflow_log = (
-        nextflow_log_path.read_text(errors="replace")[-4000:]
-        if nextflow_log_path and nextflow_log_path.exists() and nextflow_log_path.is_file()
-        else ""
-    )
     files = record.get("all_result_files") or workflow_service.output_files(job["job_id"])
 
     output_links = [
@@ -2529,6 +2317,10 @@ def refresh_job(_, current_job, session, tester_id, omics_type, project_id):
     metadata = json.loads(job.get("metadata_json") or "{}")
     submitted_params = metadata.get("submitted_params", {})
     selected_files = metadata.get("selected_files", {})
+    try:
+        job_selected_steps = workflow_service.selected_steps_for_workflow(job.get("workflow_id"))
+    except Exception:
+        job_selected_steps = []
     failed_steps = [
         step for step in record.get("step_outputs", [])
         if str(step.get("status", "")).lower() == "failed"
@@ -2558,7 +2350,7 @@ def refresh_job(_, current_job, session, tester_id, omics_type, project_id):
                 dbc.Spinner(
                     size="sm",
                     color="primary",
-                    className="me-2",
+                    spinner_class_name="me-2",
                 ),
                 html.Span("Workflow is running. Logs and outputs refresh automatically."),
             ],
@@ -2580,8 +2372,8 @@ def refresh_job(_, current_job, session, tester_id, omics_type, project_id):
                 html.P([html.Strong("Project: "), job.get("project_label") or job.get("project_id")]),
                 html.P([html.Strong("Workflow: "), steps_by_id.get(job.get("workflow_id"), {}).get("label", job.get("workflow_id"))]),
                 error_summary,
-                workflow_plan_component(record, session_id, tester_id, omics_type, project_id),
-                run_parameter_summary(submitted_params),
+                workflow_plan_component(record, session_id, tester_id, omics_type, project_id, API_PREFIX),
+                run_parameter_summary(submitted_params, job_selected_steps),
                 strandedness_result_summary(files)
                 if submitted_params.get("strandedness_method") or any(path.endswith(".strandedness_call.json") for path in files)
                 else None,
@@ -2592,10 +2384,9 @@ def refresh_job(_, current_job, session, tester_id, omics_type, project_id):
             [
                 log_block("STDOUT", stdout),
                 log_block("STDERR", stderr),
-                log_block("Nextflow log", nextflow_log),
             ]
         ),
-        html.Div([workflow_plan_component(record, session_id, tester_id, omics_type, project_id), html.H6("Output files"), html.Ul(output_links)]),
+        html.Div([html.H6("Output files"), html.Ul(output_links)]),
     )   
 
 
@@ -2620,5 +2411,5 @@ if os.environ.get("SURVOM_DEBUG_CALLBACKS") == "1":
 
 if __name__ == "__main__":
     host = os.environ.get("SURVOM_DASH_HOST", "127.0.0.1")
-    port = int(os.environ.get("SURVOM_DASH_PORT", "8056"))
+    port = int(os.environ.get("SURVOM_DASH_PORT", "8057"))
     app.run(debug=False, host=host, port=port)

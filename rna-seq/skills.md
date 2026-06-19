@@ -48,7 +48,34 @@ Before changing any image, verify it with `docker pull`.
 
 ## Minimal Regression Checks
 
-After changes, compile/check both paths:
+After any code or workflow change, run the repository test wrapper from repo root:
+
+```bash
+cd /data/shared/vikash/mult-omics
+./scripts/run_all_tests_and_workflows.sh --quick
+```
+
+Before claiming the workflow works end-to-end, run the full wrapper with Docker/Nextflow access:
+
+```bash
+cd /data/shared/vikash/mult-omics
+./scripts/run_all_tests_and_workflows.sh
+```
+
+Meaning of the two modes:
+
+```text
+--quick = code/unit/compile checks only
+default = code/unit/compile checks + tiny real FASTQ/reference Nextflow smoke runs
+```
+
+If Docker is unavailable, clearly say:
+
+```text
+Code and compile checks passed, but real Nextflow execution could not run because Docker permission is missing.
+```
+
+Also compile/check both trimming paths when touching trimming:
 
 ```text
 qc_trim with fastp
@@ -63,3 +90,51 @@ Expected outputs for Cutadapt:
 *.cutadapt.log
 trimmed_fastq_manifest.tsv
 ```
+
+## Tutorial And CLI Contract
+
+Whenever adding or changing a workflow, step, parameter, input contract, output contract, or resume behavior:
+
+- update tests or smoke cases first, preferably in `survom-pipelines/scripts/smoke_workflows.py` and/or `survom-pipelines/tests/`
+- update `docs/how_to_run_tests_and_demo_workflows.md`
+- update `docs/command_line_workflow_examples.md` with at least one real command-line example
+- keep `README.md` pointing to the current tutorial
+- keep `run_workflow_local.sh` working as a fallback when Dash/API is unavailable
+
+Students and instructors must be able to test a workflow from the command line with:
+
+```bash
+./run_workflow_local.sh \
+  --workflow <workflow_name> \
+  --input <input_dir> \
+  --output <output_dir>
+```
+
+Parameter overrides must be possible with repeatable `--param key=value` arguments:
+
+```bash
+./run_workflow_local.sh \
+  --workflow trim_only \
+  --input /path/to/input_files \
+  --output /tmp/survom_trim_test \
+  --param quality_threshold=25 \
+  --param minimum_read_length=30
+```
+
+Reference/index examples should use params too:
+
+```bash
+./run_workflow_local.sh \
+  --workflow salmon_quant_only \
+  --input /path/to/trimmed_inputs \
+  --output /tmp/survom_salmon_test \
+  --param salmon_index=/path/to/salmon_index
+```
+
+Resume must stay available:
+
+```bash
+./run_workflow_local.sh --resume <run_id>
+```
+
+Do not add a workflow that only works through Dash. Every implemented workflow should have a command-line path for debugging and teaching.

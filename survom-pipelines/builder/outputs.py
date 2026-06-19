@@ -11,7 +11,9 @@ def _read_text_tail(path: Path, limit: int = 4000) -> str:
 
 
 def _parse_task_name(command_run: Path) -> tuple[str | None, str | None]:
-    for line in _read_text_tail(command_run, 2000).splitlines():
+    if not command_run.exists() or not command_run.is_file():
+        return None, None
+    for line in command_run.read_text(errors="replace").splitlines()[:40]:
         match = re.match(r"### name: '([^']+)'", line)
         if match:
             label = match.group(1)
@@ -112,12 +114,16 @@ def collect_run_outputs(compiled_dir: str | Path, status: str = "unknown") -> Pa
             })
         process_tasks = tasks_by_process.get(step["process_name"], [])
         terminal_workflow = status in {"succeeded", "completed", "success", "failed", "error"}
-        if any(task.get("status") == "failed" for task in process_tasks):
+        has_outputs = any(output.get("count", 0) > 0 for output in found)
+        if terminal_workflow and status in {"succeeded", "completed", "success"} and has_outputs:
+            step_status = "completed"
+            missing = []
+        elif any(task.get("status") == "failed" for task in process_tasks):
             step_status = "failed"
             missing = raw_missing
         elif process_tasks and all(task.get("status") == "completed" for task in process_tasks):
-            step_status = "failed" if raw_missing else "completed"
-            missing = raw_missing
+            step_status = "completed" if has_outputs or not raw_missing else "failed"
+            missing = [] if has_outputs else raw_missing
         elif process_tasks:
             step_status = "running"
             missing = []
