@@ -79,3 +79,4 @@ dag.dot
 *.rar
 
 # Keep source docs/config/templates trackable; runtime results should stay ignored above.
+run_tmux.txt
