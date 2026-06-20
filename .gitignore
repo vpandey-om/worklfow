@@ -38,6 +38,9 @@ survom-pipelines/.nextflow.log*
 survom-pipelines/workflows/generated/
 survom-pipelines/jobs/
 survom-pipelines/results/
+survom-pipelines/downstream/work/
+survom-pipelines/downstream/.nextflow/
+survom-pipelines/downstream/.nextflow*
 
 # Logs and transient reports
 *.log

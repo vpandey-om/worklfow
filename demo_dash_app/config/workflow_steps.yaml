@@ -1,4 +1,154 @@
 steps:
+  - id: downstream_merge_featurecounts
+    name: "Atomic DS 01 - Merge count matrix"
+    label: "Atomic DS 01 - Merge count matrix"
+    omics_type: bulk_rnaseq
+    enabled: true
+    description: Validate or merge featureCounts/count-matrix input and write merged_raw_counts.csv.
+    downstream: true
+    downstream_atomic: merge-featurecounts
+    selected_steps: [downstream_merge_featurecounts]
+
+  - id: downstream_validate_inputs
+    name: "Atomic DS 02 - Validate downstream inputs"
+    label: "Atomic DS 02 - Validate downstream inputs"
+    omics_type: bulk_rnaseq
+    enabled: true
+    description: Validate counts, sample metadata, and contrasts for downstream analysis.
+    downstream: true
+    downstream_atomic: validate
+    selected_steps: [downstream_validate_inputs]
+
+  - id: downstream_filter_low_expression
+    name: "Atomic DS 03 - Filter low-expression genes"
+    label: "Atomic DS 03 - Filter low-expression genes"
+    omics_type: bulk_rnaseq
+    enabled: true
+    description: Apply CPM-based low-expression filtering and write filtered_counts.csv.
+    downstream: true
+    downstream_atomic: filter
+    selected_steps: [downstream_filter_low_expression]
+
+  - id: downstream_normalize_transform
+    name: "Atomic DS 04 - Normalize and transform"
+    label: "Atomic DS 04 - Normalize and transform"
+    omics_type: bulk_rnaseq
+    enabled: true
+    description: Normalize counts and write normalized_counts.csv and vst_expression.csv.
+    downstream: true
+    downstream_atomic: normalize
+    selected_steps: [downstream_normalize_transform]
+
+  - id: downstream_pca
+    name: "Atomic DS 05 - PCA CSV outputs"
+    label: "Atomic DS 05 - PCA CSV outputs"
+    omics_type: bulk_rnaseq
+    enabled: true
+    description: Compute PCA scores/loadings/variance CSV files from transformed expression.
+    downstream: true
+    downstream_atomic: pca
+    selected_steps: [downstream_pca]
+
+  - id: downstream_umap
+    name: "Atomic DS 06 - UMAP CSV outputs"
+    label: "Atomic DS 06 - UMAP CSV outputs"
+    omics_type: bulk_rnaseq
+    enabled: true
+    description: Compute UMAP coordinate CSV outputs from transformed expression.
+    downstream: true
+    downstream_atomic: umap
+    selected_steps: [downstream_umap]
+
+  - id: downstream_differential_expression
+    name: "Atomic DS 07 - Differential expression CSV outputs"
+    label: "Atomic DS 07 - Differential expression CSV outputs"
+    omics_type: bulk_rnaseq
+    enabled: true
+    description: Produce DESeq2-compatible differential-expression CSV contracts using current CLI fallback.
+    downstream: true
+    downstream_atomic: differential-expression
+    selected_steps: [downstream_differential_expression]
+
+  - id: downstream_plsda
+    name: "Atomic DS 08 - PLS-DA CSV outputs"
+    label: "Atomic DS 08 - PLS-DA CSV outputs"
+    omics_type: bulk_rnaseq
+    enabled: true
+    description: Compute exploratory PLS-DA CSV outputs. No plots are generated.
+    downstream: true
+    downstream_atomic: plsda
+    selected_steps: [downstream_plsda]
+
+  - id: downstream_go_enrichment
+    name: "Atomic DS 10 - GO enrichment CSV outputs"
+    label: "Atomic DS 10 - GO enrichment CSV outputs"
+    omics_type: bulk_rnaseq
+    enabled: true
+    description: Run local GMT-based GO-style overrepresentation and write CSV/JSON outputs.
+    downstream: true
+    downstream_atomic: go-enrichment
+    selected_steps: [downstream_go_enrichment]
+
+  - id: downstream_pathway_enrichment
+    name: "Atomic DS 11 - Pathway enrichment CSV outputs"
+    label: "Atomic DS 11 - Pathway enrichment CSV outputs"
+    omics_type: bulk_rnaseq
+    enabled: true
+    description: Run local GMT-based pathway overrepresentation and write CSV/JSON outputs.
+    downstream: true
+    downstream_atomic: pathway-enrichment
+    selected_steps: [downstream_pathway_enrichment]
+
+  - id: downstream_ranked_gsea
+    name: "Atomic DS 12 - Ranked GSEA CSV outputs"
+    label: "Atomic DS 12 - Ranked GSEA CSV outputs"
+    omics_type: bulk_rnaseq
+    enabled: true
+    description: Run local ranked gene-set scoring and write GSEA CSV/JSON outputs.
+    downstream: true
+    downstream_atomic: gsea
+    selected_steps: [downstream_ranked_gsea]
+
+  - id: downstream_airway_all_atomics
+    name: "Downstream demo - Airway count matrix"
+    label: "Downstream demo - Airway count matrix"
+    omics_type: bulk_rnaseq
+    enabled: true
+    description: Run all implemented downstream RNA-seq atomic steps on the bundled airway count matrix and produce CSV/JSON outputs only.
+    downstream: true
+    selected_steps:
+      - downstream_merge_featurecounts
+      - downstream_validate_inputs
+      - downstream_filter_low_expression
+      - downstream_normalize_transform
+      - downstream_pca
+      - downstream_umap
+      - downstream_differential_expression
+      - downstream_plsda
+      - downstream_go_enrichment
+      - downstream_pathway_enrichment
+      - downstream_ranked_gsea
+
+  - id: downstream_custom_all_atomics
+    name: "Downstream custom - Count matrix CSV outputs"
+    label: "Downstream custom - Count matrix CSV outputs"
+    omics_type: bulk_rnaseq
+    enabled: true
+    description: Run all implemented downstream RNA-seq atomic steps using selected or path-provided count matrix, sample metadata, and contrasts. Outputs are CSV/JSON only.
+    downstream: true
+    selected_steps:
+      - downstream_merge_featurecounts
+      - downstream_validate_inputs
+      - downstream_filter_low_expression
+      - downstream_normalize_transform
+      - downstream_pca
+      - downstream_umap
+      - downstream_differential_expression
+      - downstream_plsda
+      - downstream_go_enrichment
+      - downstream_pathway_enrichment
+      - downstream_ranked_gsea
+
   - id: reference_only
     name: "Atomic 01 - Build/Validate Reference"
     label: "Atomic 01 - Build/Validate Reference"

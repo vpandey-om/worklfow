@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SurvOm downstream RNA-seq parameters",
+  "type": "object",
+  "required": ["featurecounts_input", "metadata"],
+  "properties": {
+    "featurecounts_input": {"type": "string"},
+    "metadata": {"type": "string"},
+    "contrasts": {"type": ["string", "null"]},
+    "gene_mapping": {"type": ["string", "null"]},
+    "gmt": {"type": ["string", "null"]},
+    "run_id": {"type": "string"},
+    "runs_dir": {"type": "string"},
+    "group_column": {"type": "string"},
+    "cpm": {"type": "number"},
+    "min_samples": {"type": ["integer", "null"]},
+    "pca_components": {"type": "integer"},
+    "seed": {"type": "integer"}
+  }
+}

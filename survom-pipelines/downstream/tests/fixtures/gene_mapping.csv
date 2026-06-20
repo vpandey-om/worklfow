@@ -1,0 +1,4 @@
+gene_id,gene_symbol,ensembl_id,entrez_id
+GENE001,A,ENS001,1
+GENE002,B,ENS002,2
+GENE003,C,ENS003,3

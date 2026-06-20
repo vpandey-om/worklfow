@@ -122,6 +122,24 @@ if [[ -f "${ROOT_DIR}/survom-pipelines/scripts/smoke_workflows.py" ]]; then
   fi
 fi
 
+if [[ -f "${ROOT_DIR}/survom-pipelines/downstream/tests/run_downstream_smoke.py" ]]; then
+  run_check "downstream CLI smoke" "${ROOT_DIR}" \
+    "${PYTHON_BIN}" survom-pipelines/downstream/tests/run_downstream_smoke.py
+fi
+
+if [[ -f "${ROOT_DIR}/scripts/run_airway_downstream_atomic.sh" && -f "${ROOT_DIR}/testdatasets/countdata/test_data/airway/airway_raw_counts.csv" ]]; then
+  run_check "airway downstream atomics" "${ROOT_DIR}" \
+    "${ROOT_DIR}/scripts/run_airway_downstream_atomic.sh" --outdir "${LOG_DIR}/airway_downstream_atomic"
+fi
+
+if [[ -d "${ROOT_DIR}/survom-pipelines/downstream/tests/unit" ]]; then
+  if "${PYTHON_BIN}" -c "import pytest" >/dev/null 2>&1; then
+    run_check "pytest downstream" "${ROOT_DIR}/survom-pipelines/downstream" "${PYTHON_BIN}" -m pytest tests
+  else
+    skip_check "pytest downstream" "pytest is not installed for ${PYTHON_BIN}"
+  fi
+fi
+
 if [[ -f "${ROOT_DIR}/Makefile" ]]; then
   run_check "make test" "${ROOT_DIR}" make test
 fi

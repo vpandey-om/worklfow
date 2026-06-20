@@ -3,7 +3,11 @@ from __future__ import annotations
 import base64
 import json
 import os
+import shlex
+import subprocess
 import shutil
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 import dash
@@ -15,6 +19,7 @@ from flask import jsonify, request, send_file
 from services.job_store import JobStore
 from services.upload_service import UploadService, safe_slug
 from services.workflow_service import WorkflowService
+from services.downstream_service import DownstreamService
 from job_view import (
     log_block,
     process_status_badge,
@@ -57,6 +62,7 @@ API_PREFIX = "/upload/api"
 upload_service = UploadService(APP_ROOT / "uploads", MAX_UPLOAD_BYTES)
 job_store = JobStore(APP_ROOT / "runs" / "jobs.sqlite")
 workflow_service = WorkflowService(APP_ROOT, PIPELINE_ROOT, upload_service, job_store)
+downstream_service = DownstreamService(APP_ROOT.parent)
 
 external_stylesheets = [dbc.themes.BOOTSTRAP, dbc.icons.BOOTSTRAP]
 
@@ -150,6 +156,447 @@ def workflow_options_for_omics(omics_type: str):
         options.append({"label": "Chained workflows", "value": "__chained_workflows__", "disabled": True})
         options.extend(option(workflow_id) for workflow_id in chained)
     return options
+
+
+def workflow_is_downstream(workflow_id: str | None) -> bool:
+    return bool(workflow_id and steps_by_id.get(workflow_id, {}).get("downstream"))
+
+
+def _first_path_matching(paths: list[str], keywords: tuple[str, ...]) -> str | None:
+    for path in paths:
+        name = Path(path).name.lower()
+        if any(keyword in name for keyword in keywords):
+            return path
+    return None
+
+
+def infer_downstream_selected_inputs(selected_files: dict[str, list[str]]) -> dict[str, str | None]:
+    metadata_files = selected_files.get("metadata") or []
+    other_files = selected_files.get("other") or []
+    candidates = metadata_files + other_files
+    return {
+        "counts": _first_path_matching(candidates, ("count", "counts", "matrix", "raw_counts")),
+        "metadata": _first_path_matching(candidates, ("metadata", "sample", "samples")),
+        "contrasts": _first_path_matching(candidates, ("contrast", "contrasts")),
+        "expression": _first_path_matching(candidates, ("vst_expression", "expression", "normalized")),
+        "significant": _first_path_matching(candidates, ("significant_genes", "significant")),
+        "ranked": _first_path_matching(candidates, ("ranked_genes", "ranked")),
+        "universe": _first_path_matching(candidates, ("filtered_counts", "validated_counts", "universe")),
+        "gmt": _first_path_matching(candidates, (".gmt", "geneset", "gene_set")),
+        "gene_mapping": _first_path_matching(candidates, ("gene_mapping", "id_mapping", "annotation")),
+    }
+
+
+def default_airway_downstream_inputs() -> dict[str, str]:
+    airway = APP_ROOT.parent / "testdatasets" / "countdata" / "test_data" / "airway"
+    return {
+        "counts": str(airway / "airway_raw_counts.csv"),
+        "metadata": str(airway / "airway_sample_metadata.csv"),
+        "contrasts": str(airway / "airway_contrasts.csv"),
+    }
+
+
+DOWNSTREAM_STEP_DIRS = {
+    "downstream_merge_featurecounts": "01_merge_featurecounts",
+    "downstream_validate_inputs": "02_validate_inputs",
+    "downstream_filter_low_expression": "03_filter_low_expression",
+    "downstream_normalize_transform": "04_normalize_transform",
+    "downstream_pca": "05_pca",
+    "downstream_umap": "06_umap",
+    "downstream_differential_expression": "07_differential_expression",
+    "downstream_plsda": "08_plsda",
+    "downstream_go_enrichment": "10_go_enrichment",
+    "downstream_pathway_enrichment": "11_pathway_enrichment",
+    "downstream_ranked_gsea": "12_gsea",
+}
+
+DOWNSTREAM_INPUT_FIELDS = {
+    "counts": {
+        "label": "Counts matrix CSV/TSV path",
+        "placeholder": "/path/to/counts.csv",
+        "help": "Raw, merged, validated, or filtered count matrix.",
+    },
+    "metadata": {
+        "label": "Sample metadata CSV/TSV path",
+        "placeholder": "/path/to/metadata.csv",
+        "help": "Must include sample_id and group/condition columns.",
+    },
+    "contrasts": {
+        "label": "Contrasts CSV path",
+        "placeholder": "/path/to/contrasts.csv",
+        "help": "Needed only for differential-expression or full downstream runs.",
+    },
+    "expression": {
+        "label": "Transformed expression CSV path",
+        "placeholder": "/path/to/vst_expression.csv",
+        "help": "Use the output from Normalize and transform for PCA, UMAP, or PLS-DA.",
+    },
+    "significant": {
+        "label": "Significant genes CSV path",
+        "placeholder": "/path/to/significant_genes.csv",
+        "help": "Use differential-expression significant_genes.csv.",
+    },
+    "ranked": {
+        "label": "Ranked genes CSV path",
+        "placeholder": "/path/to/ranked_genes.csv",
+        "help": "Use differential-expression ranked_genes.csv.",
+    },
+    "universe": {
+        "label": "Tested gene universe CSV path",
+        "placeholder": "/path/to/filtered_counts.csv",
+        "help": "Usually filtered_counts.csv; used as the tested background.",
+    },
+    "gmt": {
+        "label": "Local GMT gene-set file",
+        "placeholder": "/path/to/gene_sets.gmt",
+        "help": "Optional in Dash. If empty, a tiny demo GMT is generated for teaching tests.",
+        "optional": True,
+    },
+    "gene_mapping": {
+        "label": "Gene mapping CSV path",
+        "placeholder": "/path/to/gene_mapping.csv",
+        "help": "Optional. Use when count IDs and GMT IDs differ, for example Ensembl counts with symbol pathways.",
+        "optional": True,
+    },
+}
+
+DOWNSTREAM_REQUIRED_INPUTS = {
+    "downstream_airway_all_atomics": [("counts matrix", "counts"), ("sample metadata", "metadata"), ("contrasts", "contrasts")],
+    "downstream_custom_all_atomics": [("counts matrix", "counts"), ("sample metadata", "metadata"), ("contrasts", "contrasts")],
+    "downstream_merge_featurecounts": [("counts matrix", "counts")],
+    "downstream_validate_inputs": [("counts matrix", "counts"), ("sample metadata", "metadata"), ("contrasts", "contrasts")],
+    "downstream_filter_low_expression": [("counts matrix", "counts"), ("sample metadata", "metadata")],
+    "downstream_normalize_transform": [("counts matrix", "counts"), ("sample metadata", "metadata")],
+    "downstream_pca": [("transformed expression", "expression"), ("sample metadata", "metadata")],
+    "downstream_umap": [("transformed expression", "expression"), ("sample metadata", "metadata")],
+    "downstream_differential_expression": [("counts matrix", "counts"), ("sample metadata", "metadata"), ("contrasts", "contrasts")],
+    "downstream_plsda": [("transformed expression", "expression"), ("sample metadata", "metadata")],
+    "downstream_go_enrichment": [("significant genes", "significant"), ("ranked genes", "ranked"), ("gene universe", "universe")],
+    "downstream_pathway_enrichment": [("significant genes", "significant"), ("ranked genes", "ranked"), ("gene universe", "universe")],
+    "downstream_ranked_gsea": [("ranked genes", "ranked")],
+}
+
+
+def downstream_visible_input_keys(workflow_id: str | None) -> set[str]:
+    keys = {key for _, key in DOWNSTREAM_REQUIRED_INPUTS.get(workflow_id or "", [])}
+    if workflow_id in {"downstream_go_enrichment", "downstream_pathway_enrichment", "downstream_ranked_gsea"}:
+        keys.add("gmt")
+        keys.add("gene_mapping")
+    return keys
+
+
+def latest_downstream_output(tester_id: str, omics_type: str, project_id: str, relative_names: list[str]) -> str | None:
+    jobs = [
+        job for job in job_store.list_jobs(limit=500)
+        if job.get("tester_id") == tester_id
+        and job.get("omics_type") == omics_type
+        and job.get("project_id") == project_id
+        and workflow_is_downstream(job.get("workflow_id"))
+    ]
+    for job in jobs:
+        results_dir = Path(job.get("results_dir") or "")
+        for relative in relative_names:
+            matches = sorted(results_dir.glob(relative)) if any(char in relative for char in "*?[") else [results_dir / relative]
+            for candidate in matches:
+                if candidate.exists() and candidate.is_file():
+                    return str(candidate)
+    return None
+
+
+def downstream_previous_inputs(tester_id: str, omics_type: str, project_id: str) -> dict[str, str | None]:
+    return {
+        "counts": latest_downstream_output(tester_id, omics_type, project_id, [
+            "03_filter_low_expression/filtered_counts.csv",
+            "02_validate_inputs/validated_counts.csv",
+            "01_merge_featurecounts/merged_raw_counts.csv",
+        ]),
+        "metadata": latest_downstream_output(tester_id, omics_type, project_id, [
+            "02_validate_inputs/validated_metadata.csv",
+        ]),
+        "contrasts": latest_downstream_output(tester_id, omics_type, project_id, [
+            "02_validate_inputs/validated_contrasts.csv",
+        ]),
+        "expression": latest_downstream_output(tester_id, omics_type, project_id, [
+            "04_normalize_transform/vst_expression.csv",
+        ]),
+        "significant": latest_downstream_output(tester_id, omics_type, project_id, [
+            "07_differential_expression/results/*/significant_genes.csv",
+        ]),
+        "ranked": latest_downstream_output(tester_id, omics_type, project_id, [
+            "07_differential_expression/results/*/ranked_genes.csv",
+        ]),
+        "universe": latest_downstream_output(tester_id, omics_type, project_id, [
+            "03_filter_low_expression/filtered_counts.csv",
+            "02_validate_inputs/validated_counts.csv",
+        ]),
+        "gmt": None,
+        "gene_mapping": None,
+    }
+
+
+def downstream_demo_support_files(run_dir: Path, counts: str) -> dict[str, str]:
+    inputs_dir = run_dir / "inputs"
+    inputs_dir.mkdir(parents=True, exist_ok=True)
+    genes = []
+    with Path(counts).open(encoding="utf-8", errors="replace") as handle:
+        next(handle, None)
+        for line in handle:
+            if len(genes) >= 30:
+                break
+            genes.append(line.split(",", 1)[0].strip())
+    gene_mapping = inputs_dir / "dash_gene_mapping.csv"
+    with gene_mapping.open("w", encoding="utf-8") as handle:
+        handle.write("gene_id,gene_symbol,ensembl_id,entrez_id\n")
+        for index, gene in enumerate(genes, start=1):
+            handle.write(f"{gene},gene_{index},{gene},{index}\n")
+    gmt = inputs_dir / "dash_mini_sets.gmt"
+    with gmt.open("w", encoding="utf-8") as handle:
+        handle.write("DASH_SET_1\tdash mini set 1\t" + "\t".join(genes[:10]) + "\n")
+        handle.write("DASH_SET_2\tdash mini set 2\t" + "\t".join(genes[10:20]) + "\n")
+        handle.write("DASH_SET_3\tdash mini set 3\t" + "\t".join(genes[20:30]) + "\n")
+    return {"gene_mapping": str(gene_mapping), "gmt": str(gmt)}
+
+
+def start_downstream_dash_job(
+    workflow_id: str,
+    tester_id: str,
+    omics_type: str,
+    project_id: str,
+    session_id: str,
+    inputs: dict[str, str],
+) -> dict:
+    run_id = f"{workflow_id}_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+    run_dir = APP_ROOT / "runs" / safe_slug(omics_type) / safe_slug(tester_id) / safe_slug(project_id) / run_id
+    results_dir = run_dir / "results"
+    logs_dir = run_dir / "logs"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    request_data = {
+        "run_id": run_id,
+        "workflow_id": workflow_id,
+        "tester_id": tester_id,
+        "omics_type": omics_type,
+        "project_id": project_id,
+        "inputs": inputs,
+        "results_dir": str(results_dir),
+    }
+    (run_dir / "downstream_request.json").write_text(json.dumps(request_data, indent=2), encoding="utf-8")
+    support = downstream_demo_support_files(run_dir, inputs.get("counts") or default_airway_downstream_inputs()["counts"])
+    cli = str(PIPELINE_ROOT / "downstream" / "bin" / "downstream_cli.py")
+    step_dir = DOWNSTREAM_STEP_DIRS.get(workflow_id)
+    if workflow_id in {"downstream_airway_all_atomics", "downstream_custom_all_atomics"}:
+        command = [
+            str(APP_ROOT.parent / "scripts" / "run_airway_downstream_atomic.sh"),
+            "--counts", inputs["counts"],
+            "--metadata", inputs["metadata"],
+            "--contrasts", inputs["contrasts"],
+            "--outdir", str(run_dir),
+        ]
+    elif workflow_id == "downstream_merge_featurecounts":
+        command = ["python3", cli, "merge-featurecounts", "--counts", inputs["counts"], "--outdir", str(results_dir / step_dir)]
+    elif workflow_id == "downstream_validate_inputs":
+        command = [
+            "python3", cli, "validate",
+            "--counts", inputs["counts"],
+            "--metadata", inputs["metadata"],
+            "--contrasts", inputs["contrasts"],
+            "--gene-mapping", support["gene_mapping"],
+            "--outdir", str(results_dir / step_dir),
+        ]
+    elif workflow_id == "downstream_filter_low_expression":
+        command = ["python3", cli, "filter", "--counts", inputs["counts"], "--metadata", inputs["metadata"], "--outdir", str(results_dir / step_dir)]
+    elif workflow_id == "downstream_normalize_transform":
+        command = ["python3", cli, "normalize", "--counts", inputs["counts"], "--metadata", inputs["metadata"], "--outdir", str(results_dir / step_dir)]
+    elif workflow_id == "downstream_pca":
+        command = ["python3", cli, "pca", "--expression", inputs["expression"], "--metadata", inputs["metadata"], "--outdir", str(results_dir / step_dir)]
+    elif workflow_id == "downstream_umap":
+        command = ["python3", cli, "umap", "--expression", inputs["expression"], "--metadata", inputs["metadata"], "--outdir", str(results_dir / step_dir)]
+    elif workflow_id == "downstream_differential_expression":
+        command = [
+            "python3", cli, "differential-expression",
+            "--counts", inputs["counts"],
+            "--metadata", inputs["metadata"],
+            "--contrasts", inputs["contrasts"],
+            "--gene-mapping", support["gene_mapping"],
+            "--outdir", str(results_dir / step_dir),
+        ]
+    elif workflow_id == "downstream_plsda":
+        command = ["python3", cli, "plsda", "--expression", inputs["expression"], "--metadata", inputs["metadata"], "--outdir", str(results_dir / step_dir)]
+    elif workflow_id == "downstream_go_enrichment":
+        command = [
+            "python3", cli, "go-enrichment",
+            "--significant-genes", inputs["significant"],
+            "--ranked-genes", inputs["ranked"],
+            "--universe", inputs["universe"],
+            "--gmt", inputs.get("gmt") or support["gmt"],
+            *(["--gene-mapping", inputs["gene_mapping"]] if inputs.get("gene_mapping") else []),
+            "--outdir", str(results_dir / step_dir),
+        ]
+    elif workflow_id == "downstream_pathway_enrichment":
+        command = [
+            "python3", cli, "pathway-enrichment",
+            "--significant-genes", inputs["significant"],
+            "--ranked-genes", inputs["ranked"],
+            "--universe", inputs["universe"],
+            "--gmt", inputs.get("gmt") or support["gmt"],
+            *(["--gene-mapping", inputs["gene_mapping"]] if inputs.get("gene_mapping") else []),
+            "--outdir", str(results_dir / step_dir),
+        ]
+    elif workflow_id == "downstream_ranked_gsea":
+        command = [
+            "python3", cli, "gsea",
+            "--ranked-genes", inputs["ranked"],
+            "--gmt", inputs.get("gmt") or support["gmt"],
+            *(["--gene-mapping", inputs["gene_mapping"]] if inputs.get("gene_mapping") else []),
+            "--outdir", str(results_dir / step_dir),
+        ]
+    else:
+        raise ValueError(f"Unknown downstream workflow: {workflow_id}")
+    wrapper = run_dir / "run_downstream_job.sh"
+    job_record = run_dir / "job_record.json"
+    quoted_command = " ".join(shlex.quote(str(part)) for part in command)
+    stdout_log = shlex.quote(str(logs_dir / "stdout.log"))
+    stderr_log = shlex.quote(str(logs_dir / "stderr.log"))
+    wrapper.write_text(
+        "#!/usr/bin/env bash\n"
+        "set +e\n"
+        f"{quoted_command} > {stdout_log} 2> {stderr_log}\n"
+        "code=$?\n"
+        f"python3 - <<'PY' \"$code\" \"{job_record}\"\n"
+        "import json, sys\n"
+        "from datetime import datetime, timezone\n"
+        "code = int(sys.argv[1])\n"
+        "path = sys.argv[2]\n"
+        "json.dump({\n"
+        "  'status': 'succeeded' if code == 0 else 'failed',\n"
+        "  'exit_code': code,\n"
+        "  'finished_at': datetime.now(timezone.utc).isoformat(),\n"
+        "}, open(path, 'w'), indent=2)\n"
+        "PY\n"
+        "exit $code\n",
+        encoding="utf-8",
+    )
+    wrapper.chmod(0o755)
+    started_at = datetime.now(timezone.utc).isoformat()
+    proc = subprocess.Popen(["bash", str(wrapper)], cwd=APP_ROOT.parent)
+    job_id = f"job_{run_id}"
+    metadata_json = {
+        "request_path": str(run_dir / "downstream_request.json"),
+        "submitted_params": {
+            **inputs,
+            "output_mode": "csv_json_only",
+        },
+        "selected_files": {
+            "metadata": [value for value in inputs.values() if value],
+            "fastq": [],
+            "reference": [],
+            "other": [],
+        },
+    }
+    job_store.upsert_job({
+        "job_id": job_id,
+        "run_id": run_id,
+        "session_id": session_id,
+        "tester_id": tester_id,
+        "tester_label": tester_label(tester_id),
+        "omics_type": omics_type,
+        "project_id": project_id,
+        "project_label": project_label_from_id(project_id),
+        "workflow_id": workflow_id,
+        "status": "running",
+        "pid": proc.pid,
+        "run_dir": str(run_dir),
+        "compiled_dir": str(run_dir),
+        "results_dir": str(results_dir),
+        "command": " ".join(command),
+        "stdout_path": str(logs_dir / "stdout.log"),
+        "stderr_path": str(logs_dir / "stderr.log"),
+        "started_at": started_at,
+        "metadata_json": json.dumps(metadata_json),
+    })
+    return {"run_id": run_id, "job_id": job_id, "run_dir": str(run_dir), "job_path": str(run_dir / "downstream_request.json"), "job_type": "downstream"}
+
+
+def refresh_downstream_job(job: dict) -> dict:
+    run_dir = Path(job.get("run_dir") or "")
+    record_path = run_dir / "job_record.json"
+    if record_path.exists():
+        record = json.loads(record_path.read_text(errors="replace"))
+        job_store.update_job(
+            job["job_id"],
+            status=record.get("status", job.get("status")),
+            finished_at=record.get("finished_at"),
+            exit_code=record.get("exit_code"),
+        )
+        return job_store.get_job(job["job_id"]) or job
+    if str(job.get("status", "")).lower() == "running" and job.get("pid"):
+        try:
+            os.kill(int(job["pid"]), 0)
+        except OSError:
+            job_store.update_job(job["job_id"], status="unknown")
+            return job_store.get_job(job["job_id"]) or job
+    return job
+
+
+def downstream_execution_record(job: dict) -> dict:
+    results = Path(job.get("results_dir") or "")
+    files = sorted(str(path) for path in results.rglob("*") if path.is_file()) if results.exists() else []
+    steps = []
+    for step_dir in sorted(path for path in results.glob("*") if path.is_dir()) if results.exists() else []:
+        steps.append({
+            "step_id": step_dir.name,
+            "step_name": step_dir.name,
+            "process_name": step_dir.name.upper(),
+            "status": "completed",
+            "outputs": [{"name": path.name, "files": [str(path)], "count": 1} for path in step_dir.iterdir() if path.is_file()],
+            "missing_outputs": [],
+            "tasks": [],
+            "dependencies": [],
+        })
+    return {
+        "run_id": job.get("run_id"),
+        "status": job.get("status"),
+        "step_outputs": steps,
+        "all_result_files": files,
+        "task_artifacts": [],
+    }
+
+
+def downstream_parameter_panel():
+    def downstream_input_row(key: str):
+        spec = DOWNSTREAM_INPUT_FIELDS[key]
+        optional = " Optional." if spec.get("optional") else ""
+        return html.Div(
+            [
+                dbc.Label(spec["label"], className="small fw-semibold"),
+                dbc.Input(
+                    id=f"downstream-{key}-input",
+                    type="text",
+                    placeholder=spec["placeholder"],
+                    size="sm",
+                    className="mb-1",
+                ),
+                html.Div(f"{spec['help']}{optional}", className="small text-muted mb-2"),
+            ],
+            id=f"downstream-{key}-row",
+        )
+
+    return workflow_section(
+        "Downstream count matrix inputs",
+        [
+            html.P(
+                "Runs the selected downstream atomic step and produces CSV/JSON outputs only. No plots are generated.",
+                className="small text-muted",
+            ),
+            html.Div(id="downstream-required-help", className="small text-primary mb-2"),
+            *[downstream_input_row(key) for key in DOWNSTREAM_INPUT_FIELDS],
+            html.Div(
+                "Tip: upload CSV/TSV files with the metadata uploader, select them in Uploaded files, and this panel will auto-fill matching paths. Previous outputs from this student/project are reused when compatible.",
+                className="small text-muted",
+            ),
+        ],
+        "downstream-params",
+    )
 
 
 def ensure_demo_project(tester_id: str | None, omics_type: str | None):
@@ -732,7 +1179,7 @@ sidebar = html.Div(
                 html.H6("Upload FASTQ files"),
                 upload_box("fastq-upload", "Select or drop FASTQ files here", ".fastq, .fastq.gz, .fq, .fq.gz", True),
                 html.H6("Upload sample sheet / metadata"),
-                upload_box("metadata-upload", "Select or drop sample sheet here", ".csv, .tsv, .xlsx", False),
+                upload_box("metadata-upload", "Select/drop sample sheet, metadata, counts, or contrasts CSV/TSV here", ".csv, .tsv, .xlsx", False),
                 html.H6("Upload reference files"),
                 upload_box(
                     "reference-upload",
@@ -783,6 +1230,7 @@ sidebar = html.Div(
         ),
 
         html.H6("Workflow setup"),
+        html.Div(downstream_parameter_panel(), id="downstream-panel", className="mb-3"),
         html.Div(strandedness_input_panel(), id="strandedness-input-wrapper", className="mb-3"),
         html.Div(reference_parameter_panel(), id="reference-panel", className="mb-3"),
         dbc.Switch(
@@ -1550,6 +1998,103 @@ def configure_omics(omics_type):
 
 
 @app.callback(
+    Output("downstream-panel", "style"),
+    Output("downstream-required-help", "children"),
+    Output("downstream-counts-row", "style"),
+    Output("downstream-metadata-row", "style"),
+    Output("downstream-contrasts-row", "style"),
+    Output("downstream-expression-row", "style"),
+    Output("downstream-significant-row", "style"),
+    Output("downstream-ranked-row", "style"),
+    Output("downstream-universe-row", "style"),
+    Output("downstream-gmt-row", "style"),
+    Output("downstream-gene_mapping-row", "style"),
+    Input("workflow-select", "value"),
+    Input("omics-select", "value"),
+)
+def show_downstream_parameters(workflow_id, omics_type):
+    if omics_type == "bulk_rnaseq" and workflow_is_downstream(workflow_id):
+        visible_keys = downstream_visible_input_keys(workflow_id)
+        help_text = "Required for this step: " + ", ".join(
+            DOWNSTREAM_INPUT_FIELDS[key]["label"].replace(" path", "")
+            for key in DOWNSTREAM_INPUT_FIELDS
+            if key in visible_keys and not DOWNSTREAM_INPUT_FIELDS[key].get("optional")
+        )
+        styles = [({} if key in visible_keys else {"display": "none"}) for key in DOWNSTREAM_INPUT_FIELDS]
+        return {"display": "block"}, help_text, *styles
+    hidden = {"display": "none"}
+    return hidden, "", hidden, hidden, hidden, hidden, hidden, hidden, hidden, hidden, hidden
+
+
+@app.callback(
+    Output("downstream-counts-input", "value"),
+    Output("downstream-metadata-input", "value"),
+    Output("downstream-contrasts-input", "value"),
+    Output("downstream-expression-input", "value"),
+    Output("downstream-significant-input", "value"),
+    Output("downstream-ranked-input", "value"),
+    Output("downstream-universe-input", "value"),
+    Output("downstream-gmt-input", "value"),
+    Output("downstream-gene_mapping-input", "value"),
+    Input("workflow-select", "value"),
+    Input("selected-files-checklist", "value"),
+    State("tester-select", "value"),
+    State("omics-select", "value"),
+    State("project-select", "value"),
+    State("downstream-counts-input", "value"),
+    State("downstream-metadata-input", "value"),
+    State("downstream-contrasts-input", "value"),
+    State("downstream-expression-input", "value"),
+    State("downstream-significant-input", "value"),
+    State("downstream-ranked-input", "value"),
+    State("downstream-universe-input", "value"),
+    State("downstream-gmt-input", "value"),
+    State("downstream-gene_mapping-input", "value"),
+)
+def autofill_downstream_inputs(
+    workflow_id,
+    selected_file_paths,
+    tester_id,
+    omics_type,
+    project_id,
+    current_counts,
+    current_metadata,
+    current_contrasts,
+    current_expression,
+    current_significant,
+    current_ranked,
+    current_universe,
+    current_gmt,
+    current_gene_mapping,
+):
+    if not workflow_is_downstream(workflow_id):
+        raise PreventUpdate
+    if workflow_id == "downstream_airway_all_atomics":
+        defaults = default_airway_downstream_inputs()
+        return defaults["counts"], defaults["metadata"], defaults["contrasts"], current_expression, current_significant, current_ranked, current_universe, current_gmt, current_gene_mapping
+    inferred = {}
+    if tester_id and project_id:
+        inferred.update({key: value for key, value in downstream_previous_inputs(tester_id, omics_type or "bulk_rnaseq", project_id).items() if value})
+    if selected_file_paths and tester_id and project_id:
+        try:
+            selected_files = selected_files_by_category(selected_file_paths or [], tester_id, omics_type or "bulk_rnaseq", project_id)
+            inferred.update({key: value for key, value in infer_downstream_selected_inputs(selected_files).items() if value})
+        except ValueError:
+            pass
+    return (
+        inferred.get("counts") or current_counts,
+        inferred.get("metadata") or current_metadata,
+        inferred.get("contrasts") or current_contrasts,
+        inferred.get("expression") or current_expression,
+        inferred.get("significant") or current_significant,
+        inferred.get("ranked") or current_ranked,
+        inferred.get("universe") or current_universe,
+        inferred.get("gmt") or current_gmt,
+        inferred.get("gene_mapping") or current_gene_mapping,
+    )
+
+
+@app.callback(
     Output("advanced-workflow-options", "style"),
     Input("advanced-options-toggle", "value"),
 )
@@ -2031,6 +2576,15 @@ def show_step(workflow_id, omics_type, tester_id, project_id):
     State("execution-profile-dropdown", "value"),
     State("trim-input-mode", "value"),
     State("trim-manifest-select", "value"),
+    State("downstream-counts-input", "value"),
+    State("downstream-metadata-input", "value"),
+    State("downstream-contrasts-input", "value"),
+    State("downstream-expression-input", "value"),
+    State("downstream-significant-input", "value"),
+    State("downstream-ranked-input", "value"),
+    State("downstream-universe-input", "value"),
+    State("downstream-gmt-input", "value"),
+    State("downstream-gene_mapping-input", "value"),
     State("current-session", "data"),
     State("tester-select", "value"),
     State("omics-select", "value"),
@@ -2076,6 +2630,15 @@ def run_selected_step(
     execution_profile,
     trim_input_mode,
     trim_manifest,
+    downstream_counts,
+    downstream_metadata,
+    downstream_contrasts,
+    downstream_expression,
+    downstream_significant,
+    downstream_ranked,
+    downstream_universe,
+    downstream_gmt,
+    downstream_gene_mapping,
     session,
     tester_id,
     omics_type,
@@ -2108,6 +2671,49 @@ def run_selected_step(
         selected_files = selected_files_by_category(selected_file_paths or [], tester_id, omics_type, project_id)
     except ValueError as exc:
         return current_job, dbc.Alert(str(exc), color="danger")
+
+    if workflow_is_downstream(workflow_id):
+        if workflow_id == "downstream_airway_all_atomics":
+            defaults = default_airway_downstream_inputs()
+            downstream_counts = defaults["counts"]
+            downstream_metadata = defaults["metadata"]
+            downstream_contrasts = defaults["contrasts"]
+        downstream_inputs = {
+            "counts": normalize_empty(downstream_counts),
+            "metadata": normalize_empty(downstream_metadata),
+            "contrasts": normalize_empty(downstream_contrasts),
+            "expression": normalize_empty(downstream_expression),
+            "significant": normalize_empty(downstream_significant),
+            "ranked": normalize_empty(downstream_ranked),
+            "universe": normalize_empty(downstream_universe),
+            "gmt": normalize_empty(downstream_gmt),
+            "gene_mapping": normalize_empty(downstream_gene_mapping),
+        }
+        missing = []
+        for label, key in DOWNSTREAM_REQUIRED_INPUTS.get(workflow_id, []):
+            value = downstream_inputs.get(key)
+            if not value or not Path(str(value)).exists():
+                missing.append(f"Provide a valid {label} file path.")
+        if missing:
+            return current_job, dbc.Alert(html.Ul([html.Li(error) for error in missing], className="mb-0"), color="danger")
+        try:
+            run = start_downstream_dash_job(
+                workflow_id,
+                tester_id,
+                omics_type,
+                project_id,
+                session_id,
+                {key: str(Path(str(value)).resolve()) for key, value in downstream_inputs.items() if value},
+            )
+        except Exception as exc:
+            return current_job, dbc.Alert(str(exc), color="danger")
+        return run, dbc.Alert(
+            [
+                html.Div(f"Started downstream CSV-output run {run['run_id']}."),
+                html.Div("No plots are generated; download CSV/JSON outputs from the Outputs panel.", className="small mt-1"),
+            ],
+            color="success",
+        )
 
     is_strandedness_only = workflow_is_strandedness_only(workflow_id)
     uses_existing_trimmed_reads = workflow_uses_existing_trimmed_reads(workflow_id)
@@ -2241,6 +2847,8 @@ def refresh_job(_, current_job, session, tester_id, omics_type, project_id):
 
     if not job:
         return "Job not found.", "", "No outputs."
+    if workflow_is_downstream(job.get("workflow_id")):
+        job = refresh_downstream_job(job)
     if tester_id and (
         job.get("tester_id") != tester_id
         or job.get("omics_type") != omics_type
@@ -2261,7 +2869,11 @@ def refresh_job(_, current_job, session, tester_id, omics_type, project_id):
         else ""
     )
 
-    record = workflow_service.execution_record(job["job_id"], refresh=False)
+    record = (
+        downstream_execution_record(job)
+        if workflow_is_downstream(job.get("workflow_id"))
+        else workflow_service.execution_record(job["job_id"], refresh=False)
+    )
     files = record.get("all_result_files") or workflow_service.output_files(job["job_id"])
 
     output_links = [

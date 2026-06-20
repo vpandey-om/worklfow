@@ -30,6 +30,20 @@ Student/project result tracking notes are in:
 docs/student_project_result_tracking.md
 ```
 
+Downstream RNA-seq CLI and output docs are in:
+
+```text
+survom-pipelines/downstream/docs/downstream_cli.md
+survom-pipelines/downstream/docs/downstream_outputs.md
+survom-pipelines/downstream/docs/downstream_resume_and_versions.md
+```
+
+Airway count-data downstream example:
+
+```text
+docs/airway_downstream_countdata_example.md
+```
+
 ## Run a Workflow Locally
 
 Students can run a workflow without opening the Dash app:

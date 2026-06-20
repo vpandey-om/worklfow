@@ -23,6 +23,19 @@ omics_types:
       - hisat2_featurecounts_route
       - hisat2_htseq_route
       - star_htseq_route
+      - downstream_merge_featurecounts
+      - downstream_validate_inputs
+      - downstream_filter_low_expression
+      - downstream_normalize_transform
+      - downstream_pca
+      - downstream_umap
+      - downstream_differential_expression
+      - downstream_plsda
+      - downstream_go_enrichment
+      - downstream_pathway_enrichment
+      - downstream_ranked_gsea
+      - downstream_airway_all_atomics
+      - downstream_custom_all_atomics
     message: Bulk RNA-seq preprocessing is currently active for testing.
 
   genomics:
