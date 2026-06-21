@@ -1,0 +1,5 @@
+{% if 'genomics_04_trim_fastq' in request.selected_steps %}
+    GENOMICS_BWA_ALIGN(GENOMICS_TRIM_FASTQ.out.manifest, file(params.genome_fasta, checkIfExists: true))
+{% else %}
+    GENOMICS_BWA_ALIGN(file(params.input, checkIfExists: true), file(params.genome_fasta, checkIfExists: true))
+{% endif %}

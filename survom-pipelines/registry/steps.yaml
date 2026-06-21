@@ -94,6 +94,616 @@ steps:
       beginner: "I will check the raw FASTQ quality first using FastQC."
       expert: "Use Falco only for large cohorts or speed-sensitive runs."
 
+  lcms_S1_initialize_project:
+    step_id: lcms_S1_initialize_project
+    step_name: Initialize LC-MS Project
+    category: MASS_SPEC_COMMON
+    omics: [lcms, metabolomics]
+    purpose: Create run manifest, resolved config, software version, and checksum records for LC-MS intake.
+    module_path: modules/common/initialize_project/main.nf
+    process_name: INITIALIZE_PROJECT
+    default_tool: python
+    fallback_tool: null
+    can_run_individually: true
+    can_be_skipped: false
+    depends_on: []
+    optional_depends_on: []
+    compatible_previous_outputs: [lcms_sample_sheet]
+    required_inputs:
+      - name: sample_sheet
+        type: manifest
+        formats: [csv, tsv]
+        required: true
+    outputs:
+      - name: run_manifest
+        type: json
+        pattern: "S1_initialize_project/run_manifest.json"
+        ui_visible: true
+      - name: artifact_manifest
+        type: json
+        pattern: "S1_initialize_project/artifact_manifest.json"
+        ui_visible: true
+    parameters:
+      run_scope:
+        type: enum
+        choices: [module, range, full]
+        default: module
+        exposure: user
+        ui_label: Run scope
+    next_steps:
+      recommended: [lcms_S2_validate_sample_sheet]
+      allowed: [lcms_S2_validate_sample_sheet]
+    resources:
+      cpus: 1
+      memory: 2.GB
+      time: 15.m
+    containers:
+      python: survom/lcms-core:module1-pending
+    ui:
+      card_title: Initialize LC-MS run
+      card_description: Save run-level provenance before LC-MS intake.
+      mode: automated
+      expose_in_guided: true
+    chat_guidance:
+      beginner: "I will create the LC-MS run manifest and provenance files first."
+
+  lcms_S2_validate_sample_sheet:
+    step_id: lcms_S2_validate_sample_sheet
+    step_name: Validate LC-MS Sample Sheet
+    category: MASS_SPEC_COMMON
+    omics: [lcms, metabolomics]
+    purpose: Validate LC-MS sample metadata, file paths, sample types, polarity, batch, and injection order.
+    module_path: modules/common/validate_lcms_samplesheet/main.nf
+    process_name: VALIDATE_LCMS_SAMPLESHEET
+    default_tool: python
+    fallback_tool: null
+    can_run_individually: true
+    can_be_skipped: false
+    depends_on: []
+    optional_depends_on: [lcms_S1_initialize_project]
+    compatible_previous_outputs: [lcms_sample_sheet]
+    required_inputs:
+      - name: sample_sheet
+        type: manifest
+        formats: [csv, tsv]
+        required: true
+    outputs:
+      - name: validated_samplesheet
+        type: tsv
+        pattern: "S2_validate_sample_sheet/validated_samplesheet.tsv"
+        ui_visible: true
+      - name: validation_report
+        type: json
+        pattern: "S2_validate_sample_sheet/validation_report.json"
+        ui_visible: true
+      - name: artifact_manifest
+        type: json
+        pattern: "S2_validate_sample_sheet/artifact_manifest.json"
+        ui_visible: true
+    parameters:
+      polarity:
+        type: enum
+        choices: [positive, negative]
+        default: null
+        exposure: user
+        ui_label: Polarity
+    next_steps:
+      recommended: [lcms_S0_convert_or_register_mzml]
+      allowed: [lcms_S0_convert_or_register_mzml]
+    resources:
+      cpus: 1
+      memory: 2.GB
+      time: 15.m
+    containers:
+      python: survom/lcms-core:module1-pending
+    ui:
+      card_title: Validate LC-MS sample sheet
+      card_description: Stop on duplicate IDs, missing files, invalid injection order, or mixed polarity.
+      mode: automated
+      expose_in_guided: true
+    chat_guidance:
+      beginner: "I will validate the LC-MS sample sheet and stop on unsafe metadata."
+
+  lcms_S0_convert_or_register_mzml:
+    step_id: lcms_S0_convert_or_register_mzml
+    step_name: Convert or Register mzML
+    category: MASS_SPEC_COMMON
+    omics: [lcms, metabolomics]
+    purpose: Register mzML input or construct audited MSConvert provenance for vendor raw data.
+    module_path: modules/common/convert_or_register_mzml/main.nf
+    process_name: CONVERT_OR_REGISTER_MZML
+    default_tool: passthrough_mzml
+    fallback_tool: msconvert
+    can_run_individually: true
+    can_be_skipped: false
+    depends_on: [lcms_S2_validate_sample_sheet]
+    optional_depends_on: []
+    compatible_previous_outputs: [validated_lcms_samplesheet]
+    required_inputs:
+      - name: validated_samplesheet
+        type: manifest
+        formats: [tsv]
+        required: true
+    outputs:
+      - name: conversion_manifest
+        type: tsv
+        pattern: "S0_convert_or_register_mzml/conversion_manifest.tsv"
+        ui_visible: true
+      - name: registered_mzml
+        type: file
+        pattern: "S0_convert_or_register_mzml/converted_or_registered/*.mzML"
+        ui_visible: true
+      - name: artifact_manifest
+        type: json
+        pattern: "S0_convert_or_register_mzml/artifact_manifest.json"
+        ui_visible: true
+    parameters:
+      conversion_mode:
+        type: enum
+        choices: [passthrough_mzml, host_msconvert, docker_msconvert]
+        default: passthrough_mzml
+        exposure: user
+        ui_label: MSConvert mode
+      centroiding_policy:
+        type: enum
+        choices: [require_input_centroided, request_msconvert_centroiding, preserve_input_state]
+        default: require_input_centroided
+        exposure: user
+        ui_label: Centroiding policy
+      ms_level_policy:
+        type: enum
+        choices: [preserve_all, ms1_ms2, ms1_only]
+        default: preserve_all
+        exposure: user
+        ui_label: MS level policy
+      host_msconvert_path:
+        type: string
+        default: null
+        exposure: expert
+      docker_msconvert_image:
+        type: string
+        default: null
+        exposure: expert
+      msconvert_extra_args:
+        type: string
+        default: null
+        exposure: expert
+    next_steps:
+      recommended: [lcms_S3_register_mzml_inputs]
+      allowed: [lcms_S3_register_mzml_inputs]
+    resources:
+      cpus: 2
+      memory: 4.GB
+      time: 2.h
+    containers:
+      python: survom/lcms-core:module1-pending
+    ui:
+      card_title: Register or convert mzML
+      card_description: Preserve raw files and write conversion provenance.
+      mode: guided
+      expose_in_guided: true
+    chat_guidance:
+      beginner: "I will register mzML files without changing them, or fail clearly if vendor conversion is requested but unavailable."
+
+  lcms_S3_register_mzml_inputs:
+    step_id: lcms_S3_register_mzml_inputs
+    step_name: Register mzML Inputs
+    category: MASS_SPEC_COMMON
+    omics: [lcms, metabolomics]
+    purpose: Create the mzML input manifest consumed by inspection and later feature detection.
+    module_path: modules/common/register_mzml_inputs/main.nf
+    process_name: REGISTER_MZML_INPUTS
+    default_tool: python
+    fallback_tool: null
+    can_run_individually: true
+    can_be_skipped: false
+    depends_on: [lcms_S0_convert_or_register_mzml]
+    optional_depends_on: [lcms_S2_validate_sample_sheet]
+    compatible_previous_outputs: [conversion_manifest, validated_lcms_samplesheet]
+    required_inputs:
+      - name: conversion_manifest
+        type: manifest
+        formats: [tsv]
+        required: true
+      - name: validated_samplesheet
+        type: manifest
+        formats: [tsv]
+        required: true
+    outputs:
+      - name: mzml_input_manifest
+        type: tsv
+        pattern: "S3_register_mzml_inputs/mzml_input_manifest.tsv"
+        ui_visible: true
+      - name: artifact_manifest
+        type: json
+        pattern: "S3_register_mzml_inputs/artifact_manifest.json"
+        ui_visible: true
+    parameters: {}
+    next_steps:
+      recommended: [lcms_S4_inspect_mzml]
+      allowed: [lcms_S4_inspect_mzml, lcms_S5P_centroid_mzml_peakpicker_hires]
+    resources:
+      cpus: 1
+      memory: 2.GB
+      time: 15.m
+    containers:
+      python: survom/lcms-core:module1-pending
+    ui:
+      card_title: Register mzML manifest
+      card_description: Build the explicit mzML manifest consumed by downstream LC-MS stages.
+      mode: automated
+      expose_in_guided: true
+    chat_guidance:
+      beginner: "I will create the mzML manifest used by later LC-MS steps."
+
+  lcms_S4_inspect_mzml:
+    step_id: lcms_S4_inspect_mzml
+    step_name: Inspect mzML
+    category: MASS_SPEC_COMMON
+    omics: [lcms, metabolomics]
+    purpose: Inspect mzML readability, scan counts, RT range, polarity, and TIC/BPC summaries.
+    module_path: modules/common/inspect_mzml/main.nf
+    process_name: INSPECT_MZML
+    default_tool: pyopenms
+    fallback_tool: null
+    can_run_individually: true
+    can_be_skipped: false
+    depends_on: [lcms_S3_register_mzml_inputs]
+    optional_depends_on: []
+    compatible_previous_outputs: [mzml_input_manifest]
+    required_inputs:
+      - name: mzml_input_manifest
+        type: manifest
+        formats: [tsv]
+        required: true
+    outputs:
+      - name: inspection_manifest
+        type: tsv
+        pattern: "S4_inspect_mzml/inspection_manifest.tsv"
+        ui_visible: true
+      - name: artifact_manifest
+        type: json
+        pattern: "S4_inspect_mzml/artifact_manifest.json"
+        ui_visible: true
+    parameters: {}
+    next_steps:
+      recommended: [lcms_S5_centroiding_gate]
+      allowed: [lcms_S5_centroiding_gate]
+    resources:
+      cpus: 2
+      memory: 8.GB
+      time: 1.h
+    containers:
+      pyopenms: survom/lcms-core:module1-pending
+    ui:
+      card_title: Inspect mzML
+      card_description: Requires pinned pyOpenMS/OpenMS runtime; currently blocked until runtime verification.
+      mode: automated
+      expose_in_guided: true
+    chat_guidance:
+      beginner: "I will inspect the mzML only after pyOpenMS/OpenMS is installed and verified."
+
+  lcms_S5_centroiding_gate:
+    step_id: lcms_S5_centroiding_gate
+    step_name: Centroiding Gate
+    category: MASS_SPEC_COMMON
+    omics: [lcms, metabolomics]
+    purpose: Decide whether input mzML is centroided, profile, unknown, or should be routed to explicit PeakPickerHiRes remediation.
+    module_path: modules/common/centroiding_gate/main.nf
+    process_name: CENTROIDING_GATE
+    default_tool: pyopenms
+    fallback_tool: null
+    can_run_individually: true
+    can_be_skipped: false
+    depends_on: [lcms_S4_inspect_mzml]
+    optional_depends_on: []
+    compatible_previous_outputs: [inspection_manifest]
+    required_inputs:
+      - name: inspection_manifest
+        type: manifest
+        formats: [tsv]
+        required: true
+    outputs:
+      - name: centroiding_gate_manifest
+        type: tsv
+        pattern: "S5_centroiding_gate/centroiding_gate_manifest.tsv"
+        ui_visible: true
+      - name: artifact_manifest
+        type: json
+        pattern: "S5_centroiding_gate/artifact_manifest.json"
+        ui_visible: true
+    parameters: {}
+    next_steps:
+      recommended: []
+      allowed: [lcms_S5P_centroid_mzml_peakpicker_hires]
+    resources:
+      cpus: 1
+      memory: 4.GB
+      time: 30.m
+    containers:
+      pyopenms: survom/lcms-core:module1-pending
+    ui:
+      card_title: Check centroiding state
+      card_description: Stops on profile or unknown data unless explicit remediation is selected.
+      mode: automated
+      expose_in_guided: true
+    chat_guidance:
+      beginner: "I will stop if profile data are detected unless centroiding was explicitly approved."
+
+  lcms_S5P_centroid_mzml_peakpicker_hires:
+    step_id: lcms_S5P_centroid_mzml_peakpicker_hires
+    step_name: Explicit PeakPickerHiRes Centroiding
+    category: MASS_SPEC_COMMON
+    omics: [lcms, metabolomics]
+    purpose: Explicitly centroid profile mzML with PeakPickerHiRes after user approval.
+    module_path: modules/common/centroid_mzml_peakpicker_hires/main.nf
+    process_name: CENTROID_MZML_PEAKPICKER_HIRES
+    default_tool: pyopenms_peakpicker_hires
+    fallback_tool: null
+    can_run_individually: true
+    can_be_skipped: true
+    depends_on: [lcms_S3_register_mzml_inputs]
+    optional_depends_on: [lcms_S5_centroiding_gate]
+    compatible_previous_outputs: [mzml_input_manifest]
+    required_inputs:
+      - name: mzml_input_manifest
+        type: manifest
+        formats: [tsv]
+        required: true
+    outputs:
+      - name: centroided_mzml
+        type: file
+        pattern: "S5P_centroid_mzml_peakpicker_hires/centroided/*.mzML"
+        ui_visible: true
+      - name: centroiding_report
+        type: tsv
+        pattern: "S5P_centroid_mzml_peakpicker_hires/centroiding_report.tsv"
+        ui_visible: true
+      - name: artifact_manifest
+        type: json
+        pattern: "S5P_centroid_mzml_peakpicker_hires/artifact_manifest.json"
+        ui_visible: true
+    parameters: {}
+    next_steps:
+      recommended: [lcms_S4_inspect_mzml]
+      allowed: [lcms_S4_inspect_mzml]
+    resources:
+      cpus: 4
+      memory: 16.GB
+      time: 2.h
+    containers:
+      pyopenms: survom/lcms-core:module1-pending
+    ui:
+      card_title: Explicit centroiding remediation
+      card_description: Never runs automatically; requires pyOpenMS/OpenMS verification and user approval.
+      mode: expert
+      expose_in_guided: true
+    chat_guidance:
+      beginner: "This step should run only when profile data need explicit approved centroiding."
+
+  lcms_U123_detect_features_per_sample:
+    step_id: lcms_U123_detect_features_per_sample
+    step_name: Detect Features Per Sample
+    category: MASS_SPEC_FEATURE_DETECTION
+    omics: [lcms, metabolomics]
+    purpose: Run MassTraceDetection, ElutionPeakDetection, and FeatureFindingMetabo as one durable per-sample feature detection process.
+    module_path: modules/common/detect_features_per_sample/main.nf
+    process_name: DETECT_FEATURES_PER_SAMPLE
+    default_tool: pyopenms_feature_finding_metabo
+    fallback_tool: null
+    can_run_individually: true
+    can_be_skipped: false
+    depends_on: [lcms_S5_centroiding_gate]
+    optional_depends_on: [lcms_S3_register_mzml_inputs]
+    compatible_previous_outputs: [mzml_input_manifest, centroiding_gate_manifest]
+    required_inputs:
+      - name: mzml_input_manifest
+        type: manifest
+        formats: [tsv]
+        required: true
+      - name: centroiding_gate_manifest
+        type: manifest
+        formats: [tsv]
+        required: true
+    outputs:
+      - name: featurexml
+        type: file
+        pattern: "U123_detect_features_per_sample/featureXML/*.featureXML"
+        ui_visible: true
+      - name: mass_trace_summary
+        type: csv
+        pattern: "U123_detect_features_per_sample/mass_trace_summary.csv"
+        ui_visible: true
+      - name: elution_peak_summary
+        type: csv
+        pattern: "U123_detect_features_per_sample/elution_peak_summary.csv"
+        ui_visible: true
+      - name: feature_detection_summary
+        type: csv
+        pattern: "U123_detect_features_per_sample/feature_detection_summary.csv"
+        ui_visible: true
+      - name: feature_detection_manifest
+        type: tsv
+        pattern: "U123_detect_features_per_sample/feature_detection_manifest.tsv"
+        ui_visible: true
+      - name: artifact_manifest
+        type: json
+        pattern: "U123_detect_features_per_sample/artifact_manifest.json"
+        ui_visible: true
+    parameters:
+      mass_error_ppm:
+        type: float
+        default: 10.0
+        exposure: user
+        ui_label: Mass error ppm
+      noise_threshold_int:
+        type: float
+        default: 1000.0
+        exposure: user
+        ui_label: Noise threshold intensity
+      min_trace_length_s:
+        type: float
+        default: 5.0
+        exposure: user
+        ui_label: Minimum trace length, seconds
+      quant_method:
+        type: enum
+        choices: [area, median, max_height]
+        default: area
+        exposure: user
+        ui_label: Mass trace quantification method
+      width_filtering:
+        type: enum
+        choices: ["off", "fixed", "auto"]
+        default: "off"
+        exposure: user
+        ui_label: Elution width filtering
+      min_fwhm_s:
+        type: float
+        default: 1.0
+        exposure: user
+        ui_label: Minimum FWHM, seconds
+      max_fwhm_s:
+        type: float
+        default: 120.0
+        exposure: user
+        ui_label: Maximum FWHM, seconds
+      expected_chrom_fwhm_s:
+        type: float
+        default: 10.0
+        exposure: user
+        ui_label: Expected chromatographic FWHM, seconds
+      isotope_filtering_model:
+        type: enum
+        choices: [none, metabolites]
+        default: none
+        exposure: user
+        ui_label: Isotope filtering model
+      charge_lower_bound:
+        type: integer
+        default: 1
+        exposure: user
+        ui_label: Minimum charge
+      charge_upper_bound:
+        type: integer
+        default: 1
+        exposure: user
+        ui_label: Maximum charge
+      remove_single_traces:
+        type: enum
+        choices: ["true", "false"]
+        default: "false"
+        exposure: user
+        ui_label: Remove single-trace features
+    next_steps:
+      recommended: [lcms_U4_U9_integration_matrix_qc]
+      allowed: [lcms_U4_U9_integration_matrix_qc]
+    resources:
+      cpus: 4
+      memory: 16.GB
+      time: 2.h
+    containers:
+      pyopenms: survom/lcms-core:module2-pending
+    ui:
+      card_title: Detect LC-MS features per sample
+      card_description: Runs U1/U2/U3 as logical substages inside one durable FeatureXML-producing process.
+      mode: guided
+      expose_in_guided: true
+    chat_guidance:
+      beginner: "I will detect per-sample LC-MS features only after the centroiding gate has passed."
+
+  lcms_U4_U9_integration_matrix_qc:
+    step_id: lcms_U4_U9_integration_matrix_qc
+    step_name: Integrate Features And Export Matrix QC
+    category: MASS_SPEC_FEATURE_MATRIX
+    omics: [lcms, metabolomics]
+    purpose: Select a reference run, align feature maps, link consensus features, export the raw feature matrix, and write feature/sample QC CSV files.
+    module_path: modules/common/integrate_matrix_qc/main.nf
+    process_name: INTEGRATE_MATRIX_QC
+    default_tool: pyopenms_map_alignment_consensus
+    fallback_tool: null
+    can_run_individually: true
+    can_be_skipped: false
+    depends_on: [lcms_U123_detect_features_per_sample]
+    optional_depends_on: [lcms_S2_validate_sample_sheet]
+    compatible_previous_outputs: [feature_detection_manifest, validated_samplesheet]
+    required_inputs:
+      - name: feature_detection_manifest
+        type: manifest
+        formats: [tsv]
+        required: true
+      - name: validated_samplesheet
+        type: manifest
+        formats: [tsv]
+        required: false
+    outputs:
+      - name: reference_selection_report
+        type: json
+        pattern: "U4_U9_integration_matrix_qc/U4_select_reference_run/reference_selection_report.json"
+        ui_visible: true
+      - name: aligned_feature_manifest
+        type: tsv
+        pattern: "U4_U9_integration_matrix_qc/U5_align_feature_maps/aligned_feature_manifest.tsv"
+        ui_visible: true
+      - name: consensus_features
+        type: file
+        pattern: "U4_U9_integration_matrix_qc/U6_link_consensus_features/linked_features.consensusXML"
+        ui_visible: true
+      - name: raw_feature_matrix
+        type: csv
+        pattern: "U4_U9_integration_matrix_qc/U7_export_raw_feature_matrix/raw_feature_matrix.csv"
+        ui_visible: true
+      - name: feature_metadata
+        type: csv
+        pattern: "U4_U9_integration_matrix_qc/U7_export_raw_feature_matrix/feature_metadata.csv"
+        ui_visible: true
+      - name: feature_level_qc
+        type: csv
+        pattern: "U4_U9_integration_matrix_qc/U8_feature_level_qc/feature_level_qc.csv"
+        ui_visible: true
+      - name: sample_level_qc
+        type: csv
+        pattern: "U4_U9_integration_matrix_qc/U9_sample_level_qc/sample_level_qc.csv"
+        ui_visible: true
+    parameters:
+      reference_strategy:
+        type: enum
+        choices: [most_features, pooled_qc, user_specified]
+        default: most_features
+        exposure: user
+        ui_label: Reference run selection
+      reference_sample_id:
+        type: string
+        default: null
+        exposure: expert
+        ui_label: Reference sample ID
+      link_mz_tolerance_ppm:
+        type: float
+        default: 20.0
+        exposure: user
+        ui_label: Feature linking m/z tolerance, ppm
+      link_rt_tolerance_s:
+        type: float
+        default: 30.0
+        exposure: user
+        ui_label: Feature linking RT tolerance, seconds
+    next_steps:
+      recommended: []
+      allowed: []
+    resources:
+      cpus: 4
+      memory: 16.GB
+      time: 2.h
+    containers:
+      pyopenms: survom/lcms-core:module3-pending
+    ui:
+      card_title: Integrate LC-MS features and export matrix/QC
+      card_description: Writes raw feature matrix and QC CSV files only. No normalization, imputation, annotation, or statistics are performed.
+      mode: guided
+      expose_in_guided: true
+    chat_guidance:
+      beginner: "I will align and link detected features, then export a raw matrix and QC tables."
+
   rnaseq_04_adapter_quality_trimming:
     step_id: rnaseq_04_adapter_quality_trimming
     step_name: Adapter and Quality Trimming
@@ -867,3 +1477,475 @@ steps:
     ui: {card_title: Count matrix QC, card_description: Confirm count matrix availability., mode: automated, expose_in_guided: true}
     chat_guidance:
       beginner: "I will check that the count matrix exists."
+
+  genomics_01_input_validation:
+    step_id: genomics_01_input_validation
+    step_name: Genomics Input Validation
+    category: GENOMICS_COMMON
+    omics: [genomics]
+    purpose: Validate FASTQ/BAM/VCF sample sheets, file paths, and paired-end FASTQ consistency.
+    module_path: modules/genomics/input_validation/main.nf
+    process_name: GENOMICS_INPUT_VALIDATION
+    default_tool: python
+    can_run_individually: true
+    can_be_skipped: false
+    depends_on: []
+    compatible_previous_outputs: [sample_sheet, fastq_manifest, bam_manifest, vcf_manifest]
+    required_inputs:
+      - {name: samplesheet, type: manifest, formats: [csv, tsv], required: true}
+    outputs:
+      - {name: validated_genomics_manifest, type: csv, pattern: "01_input_validation/validated_genomics_manifest.csv", ui_visible: true}
+      - {name: validation_report, type: json, pattern: "01_input_validation/validation_report.json", ui_visible: true}
+    parameters:
+      workflow_type: {type: enum, choices: [dna_short_read, rna_short_read, long_read], default: dna_short_read, exposure: user, ui_label: Workflow type}
+    next_steps:
+      recommended: [genomics_03_raw_qc]
+      allowed: [genomics_02_reference_prepare, genomics_03_raw_qc, genomics_04_trim_fastq, genomics_99_provenance_manifest]
+    resources: {cpus: 1, memory: 2.GB, time: 15.m}
+    containers: {}
+    ui: {card_title: Validate genomics inputs, card_description: Check FASTQ/BAM/VCF manifests before running DNA genomics workflows., mode: automated, expose_in_guided: true}
+    chat_guidance:
+      beginner: "I will validate your genomics sample sheet and paired FASTQ naming first."
+
+  genomics_02_reference_prepare:
+    step_id: genomics_02_reference_prepare
+    step_name: DNA Reference Preparation
+    category: GENOMICS_REFERENCE
+    omics: [genomics]
+    purpose: Prepare a reusable DNA reference bundle with FASTA index and sequence dictionary metadata.
+    module_path: modules/genomics/reference_prepare/main.nf
+    process_name: GENOMICS_REFERENCE_PREPARE
+    default_tool: python
+    fallback_tool: samtools/bwa
+    can_run_individually: true
+    can_be_skipped: false
+    depends_on: []
+    compatible_previous_outputs: [genome_fasta]
+    required_inputs:
+      - {name: genome_fasta, type: file, formats: [fa, fasta, fa.gz, fasta.gz], required: true}
+    outputs:
+      - {name: reference_bundle, type: json, pattern: "02_reference_prepare/reference_bundle.json", ui_visible: true}
+      - {name: fasta_index, type: file, pattern: "02_reference_prepare/*.fai", ui_visible: true}
+      - {name: sequence_dictionary, type: file, pattern: "02_reference_prepare/*.dict", ui_visible: true}
+    parameters:
+      genome_fasta: {type: file, default: null, exposure: user, ui_label: Genome FASTA}
+      reference_name: {type: string, default: custom_reference, exposure: user, ui_label: Reference name}
+      threads: {type: integer, default: 2, min: 1, max: 32, exposure: user, ui_label: Threads}
+    next_steps:
+      recommended: [genomics_03_raw_qc]
+      allowed: [genomics_03_raw_qc, genomics_04_trim_fastq, genomics_99_provenance_manifest]
+    resources: {cpus: 2, memory: 4.GB, time: 1.h}
+    containers: {}
+    ui: {card_title: Prepare DNA reference, card_description: Create lightweight reference bundle metadata and local FASTA index files., mode: automated, expose_in_guided: true}
+    chat_guidance:
+      beginner: "I will prepare a reusable reference bundle from your genome FASTA."
+
+  genomics_03_raw_qc:
+    step_id: genomics_03_raw_qc
+    step_name: Genomics Raw FASTQ QC
+    category: GENOMICS_COMMON
+    omics: [genomics]
+    purpose: Summarize raw FASTQ read and base counts before trimming or alignment.
+    module_path: modules/genomics/raw_qc/main.nf
+    process_name: GENOMICS_RAW_QC
+    default_tool: python
+    fallback_tool: fastqc
+    can_run_individually: true
+    can_be_skipped: false
+    depends_on: []
+    compatible_previous_outputs: [validated_genomics_manifest]
+    required_inputs:
+      - {name: validated_genomics_manifest, type: manifest, formats: [csv], required: true}
+    outputs:
+      - {name: raw_qc_metrics, type: csv, pattern: "03_raw_qc/raw_qc_metrics.csv", ui_visible: true}
+      - {name: raw_qc_summary, type: json, pattern: "03_raw_qc/raw_qc_summary.json", ui_visible: true}
+    parameters:
+      threads: {type: integer, default: 2, min: 1, max: 32, exposure: user, ui_label: Threads}
+    next_steps:
+      recommended: [genomics_04_trim_fastq]
+      allowed: [genomics_04_trim_fastq, genomics_99_provenance_manifest]
+    resources: {cpus: 2, memory: 4.GB, time: 1.h}
+    containers: {}
+    ui: {card_title: Raw genomics FASTQ QC, card_description: Produce minimal FASTQ count metrics; FastQC can be layered later., mode: automated, expose_in_guided: true}
+    chat_guidance:
+      beginner: "I will count reads and bases in the raw FASTQ files."
+
+  genomics_04_trim_fastq:
+    step_id: genomics_04_trim_fastq
+    step_name: Genomics FASTQ Trimming
+    category: GENOMICS_COMMON
+    omics: [genomics]
+    purpose: Produce a trimmed FASTQ manifest contract for downstream genomics alignment.
+    module_path: modules/genomics/trim_fastq/main.nf
+    process_name: GENOMICS_TRIM_FASTQ
+    default_tool: python
+    fallback_tool: fastp
+    can_run_individually: true
+    can_be_skipped: false
+    depends_on: []
+    compatible_previous_outputs: [validated_genomics_manifest]
+    required_inputs:
+      - {name: validated_genomics_manifest, type: manifest, formats: [csv], required: true}
+    outputs:
+      - {name: trimmed_fastq_manifest, type: csv, pattern: "04_trim/trimmed_fastq_manifest.csv", ui_visible: true}
+      - {name: trim_report, type: json, pattern: "04_trim/trim_report.json", ui_visible: true}
+      - {name: trimmed_fastq, type: file, pattern: "04_trim/trimmed_fastq/*", ui_visible: true}
+    parameters:
+      quality_cutoff: {type: integer, default: 20, min: 0, max: 40, exposure: user, ui_label: Quality cutoff}
+      min_length: {type: integer, default: 20, min: 1, max: 1000, exposure: user, ui_label: Minimum read length}
+      threads: {type: integer, default: 2, min: 1, max: 32, exposure: user, ui_label: Threads}
+    next_steps:
+      recommended: [genomics_99_provenance_manifest]
+      allowed: [genomics_99_provenance_manifest]
+    resources: {cpus: 2, memory: 4.GB, time: 1.h}
+    containers: {}
+    ui: {card_title: Trim genomics FASTQ, card_description: Write trimmed FASTQ files and a manifest for later alignment steps., mode: automated, expose_in_guided: true}
+    chat_guidance:
+      beginner: "I will create trimmed FASTQ files and the manifest needed by downstream steps."
+
+  genomics_05_bwa_alignment:
+    step_id: genomics_05_bwa_alignment
+    step_name: BWA-MEM2/BWA Alignment
+    category: GENOMICS_ALIGNMENT
+    omics: [genomics]
+    purpose: Align DNA short reads to a prepared reference. Tool-gated until bwa-mem2 or bwa is available.
+    module_path: modules/genomics/bwa_align/main.nf
+    process_name: GENOMICS_BWA_ALIGN
+    default_tool: bwa-mem2
+    fallback_tool: bwa
+    can_run_individually: true
+    depends_on: []
+    compatible_previous_outputs: [trimmed_fastq_manifest, reference_bundle]
+    required_inputs: []
+    outputs:
+      - {name: alignment_manifest, type: csv, pattern: "05_bwa_align/alignment_manifest.csv", ui_visible: true}
+      - {name: sam, type: file, pattern: "05_bwa_align/*.sam", ui_visible: true}
+    parameters:
+      threads: {type: integer, default: 4, min: 1, max: 32, exposure: user, ui_label: Threads}
+    next_steps: {recommended: [genomics_06_bam_processing], allowed: [genomics_06_bam_processing]}
+    resources: {cpus: 4, memory: 8.GB, time: 4.h}
+    containers: {}
+    ui: {card_title: Align DNA reads, card_description: Requires bwa-mem2 or bwa., mode: automated, expose_in_guided: true}
+    chat_guidance: {beginner: "I will check BWA-MEM2/BWA availability before DNA alignment."}
+
+  genomics_06_bam_processing:
+    step_id: genomics_06_bam_processing
+    step_name: BAM Sort/Index/Statistics
+    category: GENOMICS_BAM
+    omics: [genomics]
+    purpose: Sort and index BAM files and collect flagstat/stats metrics. Tool-gated until samtools is available.
+    module_path: modules/genomics/bam_processing/main.nf
+    process_name: GENOMICS_BAM_PROCESSING
+    default_tool: samtools
+    can_run_individually: true
+    depends_on: []
+    compatible_previous_outputs: [bam]
+    required_inputs: []
+    outputs:
+      - {name: bam_manifest, type: csv, pattern: "06_bam_processing/bam_manifest.csv", ui_visible: true}
+      - {name: sorted_bam, type: bam, pattern: "06_bam_processing/*.sorted.bam", ui_visible: true}
+      - {name: bam_index, type: bai, pattern: "06_bam_processing/*.sorted.bam.bai", ui_visible: true}
+      - {name: flagstat, type: text, pattern: "06_bam_processing/*.flagstat.txt", ui_visible: true}
+    parameters:
+      threads: {type: integer, default: 4, min: 1, max: 32, exposure: user, ui_label: Threads}
+    next_steps: {recommended: [genomics_07_mark_duplicates], allowed: [genomics_07_mark_duplicates, genomics_08_coverage_qc, genomics_10_germline_variants]}
+    resources: {cpus: 4, memory: 8.GB, time: 2.h}
+    containers: {}
+    ui: {card_title: Process BAM, card_description: Requires samtools sort/index/flagstat/stats., mode: automated, expose_in_guided: true}
+    chat_guidance: {beginner: "I will check samtools before BAM processing."}
+
+  genomics_07_mark_duplicates:
+    step_id: genomics_07_mark_duplicates
+    step_name: Mark Duplicates
+    category: GENOMICS_BAM
+    omics: [genomics]
+    purpose: Mark or remove PCR/optical duplicates. Tool-gated until samtools or Picard is available.
+    module_path: modules/genomics/mark_duplicates/main.nf
+    process_name: GENOMICS_MARK_DUPLICATES
+    default_tool: samtools
+    fallback_tool: picard
+    can_run_individually: true
+    depends_on: []
+    compatible_previous_outputs: [sorted_bam]
+    required_inputs: []
+    outputs:
+      - {name: marked_bam_manifest, type: csv, pattern: "07_mark_duplicates/marked_bam_manifest.csv", ui_visible: true}
+      - {name: marked_bam, type: bam, pattern: "07_mark_duplicates/*.marked.bam", ui_visible: true}
+      - {name: duplicate_metrics, type: text, pattern: "07_mark_duplicates/*markdup_metrics.txt", ui_visible: true}
+    parameters:
+      remove_duplicates: {type: boolean, default: false, exposure: user, ui_label: Remove duplicates}
+    next_steps: {recommended: [genomics_08_coverage_qc], allowed: [genomics_08_coverage_qc, genomics_09_bqsr, genomics_10_germline_variants]}
+    resources: {cpus: 4, memory: 8.GB, time: 2.h}
+    containers: {}
+    ui: {card_title: Mark duplicates, card_description: Requires samtools markdup or Picard MarkDuplicates., mode: automated, expose_in_guided: true}
+    chat_guidance: {beginner: "I will check duplicate-marking tools before running this step."}
+
+  genomics_08_coverage_qc:
+    step_id: genomics_08_coverage_qc
+    step_name: Coverage QC
+    category: GENOMICS_QC
+    omics: [genomics]
+    purpose: Compute per-base/per-region coverage summaries. Tool-gated until mosdepth or Qualimap is available.
+    module_path: modules/genomics/coverage_qc/main.nf
+    process_name: GENOMICS_COVERAGE_QC
+    default_tool: mosdepth
+    fallback_tool: qualimap
+    can_run_individually: true
+    depends_on: []
+    compatible_previous_outputs: [sorted_bam, marked_bam]
+    required_inputs: []
+    outputs:
+      - {name: coverage_manifest, type: csv, pattern: "08_coverage_qc/coverage_manifest.csv", ui_visible: true}
+      - {name: coverage_summary, type: text, pattern: "08_coverage_qc/*.mosdepth.summary.txt", ui_visible: true}
+    parameters:
+      intervals_bed: {type: file, default: null, exposure: user, ui_label: Optional intervals BED}
+    next_steps: {recommended: [genomics_10_germline_variants], allowed: [genomics_09_bqsr, genomics_10_germline_variants, genomics_16_multiqc_report]}
+    resources: {cpus: 4, memory: 8.GB, time: 2.h}
+    containers: {}
+    ui: {card_title: Coverage QC, card_description: Requires mosdepth or Qualimap., mode: automated, expose_in_guided: true}
+    chat_guidance: {beginner: "I will check coverage tools before running coverage QC."}
+
+  genomics_09_bqsr:
+    step_id: genomics_09_bqsr
+    step_name: Base Quality Score Recalibration
+    category: GENOMICS_VARIANTS
+    omics: [genomics]
+    purpose: Optional GATK BQSR for organisms with known-sites resources.
+    module_path: modules/genomics/bqsr/main.nf
+    process_name: GENOMICS_BQSR
+    default_tool: gatk
+    can_run_individually: true
+    can_be_skipped: true
+    depends_on: []
+    compatible_previous_outputs: [sorted_bam, marked_bam]
+    required_inputs: []
+    outputs:
+      - {name: step_status, type: json, pattern: "09_bqsr/step_status.json", ui_visible: true}
+    parameters:
+      known_sites_vcf: {type: file, default: null, exposure: user, ui_label: Known-sites VCF}
+    next_steps: {recommended: [genomics_10_germline_variants], allowed: [genomics_10_germline_variants]}
+    resources: {cpus: 4, memory: 16.GB, time: 4.h}
+    containers: {}
+    ui: {card_title: Optional BQSR, card_description: Requires GATK and known-sites VCFs., mode: automated, expose_in_guided: true}
+    chat_guidance: {beginner: "I will skip BQSR unless known-sites resources are available."}
+
+  genomics_10_germline_variants:
+    step_id: genomics_10_germline_variants
+    step_name: Germline SNV/Indel Calling
+    category: GENOMICS_VARIANTS
+    omics: [genomics]
+    purpose: Call germline SNVs/indels. Tool-gated until GATK or DeepVariant is available.
+    module_path: modules/genomics/germline_variants/main.nf
+    process_name: GENOMICS_GERMLINE_VARIANTS
+    default_tool: gatk
+    fallback_tool: deepvariant
+    can_run_individually: true
+    depends_on: []
+    compatible_previous_outputs: [bam, recalibrated_bam]
+    required_inputs: []
+    outputs:
+      - {name: raw_vcf_manifest, type: csv, pattern: "10_germline_variants/raw_vcf_manifest.csv", ui_visible: true}
+      - {name: raw_vcf, type: vcf, pattern: "10_germline_variants/*.raw.vcf.gz", ui_visible: true}
+    parameters:
+      ploidy: {type: integer, default: 2, min: 1, max: 8, exposure: user, ui_label: Ploidy}
+      intervals_bed: {type: file, default: null, exposure: user, ui_label: Optional intervals BED}
+    next_steps: {recommended: [genomics_12_variant_filtering], allowed: [genomics_12_variant_filtering, genomics_15_variant_annotation]}
+    resources: {cpus: 4, memory: 16.GB, time: 8.h}
+    containers: {}
+    ui: {card_title: Germline variant calling, card_description: Requires GATK HaplotypeCaller or DeepVariant., mode: automated, expose_in_guided: true}
+    chat_guidance: {beginner: "I will check germline variant callers before running."}
+
+  genomics_11_somatic_variants:
+    step_id: genomics_11_somatic_variants
+    step_name: Somatic Variant Calling
+    category: GENOMICS_VARIANTS
+    omics: [genomics]
+    purpose: Call tumor/normal or tumor-only somatic variants. Tool-gated until GATK Mutect2 is available.
+    module_path: modules/genomics/somatic_variants/main.nf
+    process_name: GENOMICS_SOMATIC_VARIANTS
+    default_tool: gatk
+    can_run_individually: true
+    depends_on: []
+    compatible_previous_outputs: [tumor_bam, normal_bam]
+    required_inputs: []
+    outputs:
+      - {name: step_status, type: json, pattern: "11_somatic_variants/step_status.json", ui_visible: true}
+    parameters:
+      tumor_sample_name: {type: string, default: tumor, exposure: user, ui_label: Tumor sample name}
+      normal_sample_name: {type: string, default: null, exposure: user, ui_label: Optional normal sample name}
+    next_steps: {recommended: [genomics_12_variant_filtering], allowed: [genomics_12_variant_filtering, genomics_15_variant_annotation]}
+    resources: {cpus: 4, memory: 16.GB, time: 8.h}
+    containers: {}
+    ui: {card_title: Somatic variant calling, card_description: Requires GATK Mutect2., mode: automated, expose_in_guided: true}
+    chat_guidance: {beginner: "I will check Mutect2 before somatic calling."}
+
+  genomics_12_variant_filtering:
+    step_id: genomics_12_variant_filtering
+    step_name: Variant Filtering
+    category: GENOMICS_VARIANTS
+    omics: [genomics]
+    purpose: Filter VCF records by quality/depth/mapping/allele-frequency rules.
+    module_path: modules/genomics/variant_filtering/main.nf
+    process_name: GENOMICS_VARIANT_FILTERING
+    default_tool: bcftools
+    fallback_tool: gatk
+    can_run_individually: true
+    depends_on: []
+    compatible_previous_outputs: [vcf]
+    required_inputs: []
+    outputs:
+      - {name: filtered_vcf_manifest, type: csv, pattern: "12_variant_filtering/filtered_vcf_manifest.csv", ui_visible: true}
+      - {name: filtered_vcf, type: vcf, pattern: "12_variant_filtering/*.filtered.vcf.gz", ui_visible: true}
+    parameters:
+      min_qual: {type: integer, default: 30, min: 0, max: 1000, exposure: user, ui_label: Minimum QUAL}
+      min_depth: {type: integer, default: 10, min: 0, max: 100000, exposure: user, ui_label: Minimum DP}
+    next_steps: {recommended: [genomics_15_variant_annotation], allowed: [genomics_15_variant_annotation, genomics_16_multiqc_report]}
+    resources: {cpus: 2, memory: 4.GB, time: 2.h}
+    containers: {}
+    ui: {card_title: Filter variants, card_description: Requires bcftools or GATK VariantFiltration., mode: automated, expose_in_guided: true}
+    chat_guidance: {beginner: "I will check VCF filtering tools before running."}
+
+  genomics_13_structural_variants:
+    step_id: genomics_13_structural_variants
+    step_name: Structural Variant Calling
+    category: GENOMICS_VARIANTS
+    omics: [genomics]
+    purpose: Call structural variants. Tool-gated until Manta, Delly, or Sniffles is available.
+    module_path: modules/genomics/structural_variants/main.nf
+    process_name: GENOMICS_STRUCTURAL_VARIANTS
+    default_tool: manta
+    fallback_tool: delly/sniffles
+    can_run_individually: true
+    depends_on: []
+    compatible_previous_outputs: [bam]
+    required_inputs: []
+    outputs:
+      - {name: step_status, type: json, pattern: "13_structural_variants/step_status.json", ui_visible: true}
+    parameters:
+      sv_caller: {type: enum, choices: [manta, delly, sniffles], default: manta, exposure: user, ui_label: SV caller}
+    next_steps: {recommended: [genomics_15_variant_annotation], allowed: [genomics_15_variant_annotation]}
+    resources: {cpus: 4, memory: 16.GB, time: 8.h}
+    containers: {}
+    ui: {card_title: Structural variants, card_description: Requires Manta, Delly, or Sniffles., mode: automated, expose_in_guided: true}
+    chat_guidance: {beginner: "I will check SV callers before running."}
+
+  genomics_14_cnv_calling:
+    step_id: genomics_14_cnv_calling
+    step_name: CNV Calling
+    category: GENOMICS_VARIANTS
+    omics: [genomics]
+    purpose: Call copy-number variation. Tool-gated until CNVkit is available.
+    module_path: modules/genomics/cnv_calling/main.nf
+    process_name: GENOMICS_CNV_CALLING
+    default_tool: cnvkit
+    can_run_individually: true
+    depends_on: []
+    compatible_previous_outputs: [bam, coverage]
+    required_inputs: []
+    outputs:
+      - {name: step_status, type: json, pattern: "14_cnv_calling/step_status.json", ui_visible: true}
+    parameters:
+      assay_type: {type: enum, choices: [wgs, wes, targeted], default: wgs, exposure: user, ui_label: Assay type}
+    next_steps: {recommended: [genomics_16_multiqc_report], allowed: [genomics_16_multiqc_report]}
+    resources: {cpus: 4, memory: 16.GB, time: 8.h}
+    containers: {}
+    ui: {card_title: CNV calling, card_description: Requires CNVkit., mode: automated, expose_in_guided: true}
+    chat_guidance: {beginner: "I will check CNVkit before CNV calling."}
+
+  genomics_15_variant_annotation:
+    step_id: genomics_15_variant_annotation
+    step_name: Variant Annotation
+    category: GENOMICS_VARIANTS
+    omics: [genomics]
+    purpose: Annotate VCF calls. Tool-gated until VEP or SnpEff is available.
+    module_path: modules/genomics/variant_annotation/main.nf
+    process_name: GENOMICS_VARIANT_ANNOTATION
+    default_tool: vep
+    fallback_tool: snpeff
+    can_run_individually: true
+    depends_on: []
+    compatible_previous_outputs: [vcf]
+    required_inputs: []
+    outputs:
+      - {name: step_status, type: json, pattern: "15_variant_annotation/step_status.json", ui_visible: true}
+    parameters:
+      genome_build: {type: string, default: GRCh38, exposure: user, ui_label: Genome build}
+      cache_path: {type: file, default: null, exposure: user, ui_label: Optional annotation cache}
+    next_steps: {recommended: [genomics_16_multiqc_report], allowed: [genomics_16_multiqc_report]}
+    resources: {cpus: 4, memory: 16.GB, time: 8.h}
+    containers: {}
+    ui: {card_title: Annotate variants, card_description: Requires VEP or SnpEff., mode: automated, expose_in_guided: true}
+    chat_guidance: {beginner: "I will check annotation tools before running."}
+
+  genomics_16_multiqc_report:
+    step_id: genomics_16_multiqc_report
+    step_name: MultiQC Final Report
+    category: GENOMICS_QC
+    omics: [genomics]
+    purpose: Aggregate QC outputs into a final MultiQC report. Tool-gated until MultiQC is available.
+    module_path: modules/genomics/multiqc_report/main.nf
+    process_name: GENOMICS_MULTIQC_REPORT
+    default_tool: multiqc
+    can_run_individually: true
+    depends_on: []
+    compatible_previous_outputs: [qc_outputs]
+    required_inputs: []
+    outputs:
+      - {name: multiqc_report, type: html, pattern: "16_multiqc/multiqc_report.html", ui_visible: true}
+    parameters:
+      report_title: {type: string, default: SurvOm Genomics MultiQC, exposure: user, ui_label: Report title}
+    next_steps: {recommended: [], allowed: []}
+    resources: {cpus: 2, memory: 4.GB, time: 1.h}
+    containers: {}
+    ui: {card_title: MultiQC report, card_description: Requires MultiQC., mode: automated, expose_in_guided: true}
+    chat_guidance: {beginner: "I will check MultiQC before building the final report."}
+
+  genomics_17_tool_inventory:
+    step_id: genomics_17_tool_inventory
+    step_name: Genomics Tool Inventory
+    category: GENOMICS_COMMON
+    omics: [genomics]
+    purpose: Report whether downstream Genomics tools are installed without failing the demo chain.
+    module_path: modules/genomics/tool_inventory/main.nf
+    process_name: GENOMICS_TOOL_INVENTORY
+    default_tool: python
+    can_run_individually: true
+    depends_on: []
+    compatible_previous_outputs: [any_genomics_outputs]
+    required_inputs: []
+    outputs:
+      - {name: tool_inventory_csv, type: csv, pattern: "17_tool_inventory/tool_inventory.csv", ui_visible: true}
+      - {name: tool_inventory_json, type: json, pattern: "17_tool_inventory/tool_inventory.json", ui_visible: true}
+    parameters: {}
+    next_steps: {recommended: [genomics_99_provenance_manifest], allowed: [genomics_99_provenance_manifest]}
+    resources: {cpus: 1, memory: 1.GB, time: 15.m}
+    containers: {}
+    ui: {card_title: Genomics tool inventory, card_description: Checks BWA, samtools, GATK, bcftools, VEP/SnpEff, CNVkit, SV callers, and MultiQC availability., mode: automated, expose_in_guided: true}
+    chat_guidance: {beginner: "I will report which downstream tools are ready and which need installation."}
+
+  genomics_99_provenance_manifest:
+    step_id: genomics_99_provenance_manifest
+    step_name: Genomics Provenance Manifest
+    category: GENOMICS_COMMON
+    omics: [genomics]
+    purpose: Save run ID, parameters, inputs, outputs, and provenance summary.
+    module_path: modules/genomics/provenance_manifest/main.nf
+    process_name: GENOMICS_PROVENANCE_MANIFEST
+    default_tool: python
+    can_run_individually: true
+    can_be_skipped: false
+    depends_on: []
+    compatible_previous_outputs: [any_genomics_outputs]
+    required_inputs: []
+    outputs:
+      - {name: run_manifest, type: json, pattern: "99_provenance/run_manifest.json", ui_visible: true}
+    parameters:
+      workflow_name: {type: string, default: genomics_workflow, exposure: user, ui_label: Workflow name}
+    next_steps:
+      recommended: []
+      allowed: []
+    resources: {cpus: 1, memory: 2.GB, time: 15.m}
+    containers: {}
+    ui: {card_title: Save genomics provenance, card_description: Write a run manifest for reproducibility., mode: automated, expose_in_guided: true}
+    chat_guidance:
+      beginner: "I will save a run manifest so this analysis can be tracked later."

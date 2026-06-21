@@ -1,0 +1,7 @@
+{% if 'genomics_07_mark_duplicates' in request.selected_steps %}
+    GENOMICS_COVERAGE_QC(GENOMICS_MARK_DUPLICATES.out.manifest)
+{% elif 'genomics_06_bam_processing' in request.selected_steps %}
+    GENOMICS_COVERAGE_QC(GENOMICS_BAM_PROCESSING.out.manifest)
+{% else %}
+    GENOMICS_COVERAGE_QC(file(params.input, checkIfExists: true))
+{% endif %}

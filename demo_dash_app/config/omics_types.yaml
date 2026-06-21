@@ -40,8 +40,33 @@ omics_types:
 
   genomics:
     label: Genomics
-    enabled: false
-    message: Genomics workflows are under development.
+    enabled: true
+    default_workflow: genomics_input_validation
+    upload_categories:
+      - fastq
+      - metadata
+      - reference
+    workflows:
+      - genomics_input_validation
+      - genomics_reference_prepare
+      - genomics_raw_qc
+      - genomics_trim_fastq
+      - genomics_bwa_alignment
+      - genomics_bam_processing
+      - genomics_mark_duplicates
+      - genomics_coverage_qc
+      - genomics_bqsr
+      - genomics_germline_variants
+      - genomics_somatic_variants
+      - genomics_variant_filtering
+      - genomics_structural_variants
+      - genomics_cnv_calling
+      - genomics_variant_annotation
+      - genomics_multiqc_report
+      - genomics_full_demo_chain
+      - genomics_all_tool_inventory_chain
+      - genomics_fastq_foundation_chain
+    message: Genomics atomic workflows are active for validation, reference preparation, raw QC, trimming, and tool inventory tests.
 
   scrnaseq:
     label: Single-cell RNA-seq
@@ -55,5 +80,21 @@ omics_types:
 
   metabolomics:
     label: Metabolomics
-    enabled: false
-    message: Metabolomics workflows are under development.
+    enabled: true
+    default_workflow: targeted_lcms_full_pipeline
+    upload_categories:
+      - metadata
+      - vendor
+      - other
+    workflows:
+      - lcms_s0_vendor_to_mzml
+      - lcms_mzml_intake_qc
+      - lcms_feature_detection
+      - lcms_peak_alignment_matrix
+      - targeted_lcms_validate_inputs
+      - targeted_lcms_peak_detection
+      - targeted_lcms_rt_alignment_diagnostic
+      - targeted_lcms_metabolite_quantification
+      - untargeted_lcms_full_pipeline
+      - targeted_lcms_full_pipeline
+    message: "Metabolomics workflows are active for testing: RAW to mzML, peak detection, peak alignment, and targeted metabolite quantification."

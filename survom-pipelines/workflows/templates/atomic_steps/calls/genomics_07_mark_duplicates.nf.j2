@@ -1,0 +1,5 @@
+{% if 'genomics_06_bam_processing' in request.selected_steps %}
+    GENOMICS_MARK_DUPLICATES(GENOMICS_BAM_PROCESSING.out.manifest)
+{% else %}
+    GENOMICS_MARK_DUPLICATES(file(params.input, checkIfExists: true))
+{% endif %}

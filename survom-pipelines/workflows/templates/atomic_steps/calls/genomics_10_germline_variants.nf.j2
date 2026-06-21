@@ -1,0 +1,7 @@
+{% if 'genomics_07_mark_duplicates' in request.selected_steps %}
+    GENOMICS_GERMLINE_VARIANTS(GENOMICS_MARK_DUPLICATES.out.manifest, file(params.genome_fasta, checkIfExists: true))
+{% elif 'genomics_06_bam_processing' in request.selected_steps %}
+    GENOMICS_GERMLINE_VARIANTS(GENOMICS_BAM_PROCESSING.out.manifest, file(params.genome_fasta, checkIfExists: true))
+{% else %}
+    GENOMICS_GERMLINE_VARIANTS(file(params.input, checkIfExists: true), file(params.genome_fasta, checkIfExists: true))
+{% endif %}

@@ -1,0 +1,5 @@
+{% if 'genomics_10_germline_variants' in request.selected_steps %}
+    GENOMICS_VARIANT_FILTERING(GENOMICS_GERMLINE_VARIANTS.out.manifest)
+{% else %}
+    GENOMICS_VARIANT_FILTERING(file(params.input, checkIfExists: true))
+{% endif %}

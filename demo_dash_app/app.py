@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import base64
+import csv
+import hashlib
 import json
 import os
 import shlex
 import subprocess
 import shutil
+import tarfile
 import uuid
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -170,6 +174,80 @@ def _first_path_matching(paths: list[str], keywords: tuple[str, ...]) -> str | N
     return None
 
 
+def table_columns(path: str | Path) -> set[str]:
+    path = Path(path)
+    if path.suffix.lower() not in {".csv", ".tsv"}:
+        return set()
+    try:
+        with path.open("r", errors="replace", encoding="utf-8") as handle:
+            first = handle.readline()
+    except Exception:
+        return set()
+    delimiter = "\t" if "\t" in first or path.suffix.lower() == ".tsv" else ","
+    return {column.strip().lower() for column in first.split(delimiter) if column.strip()}
+
+
+def looks_like_targeted_assay(path: str | Path) -> bool:
+    columns = table_columns(path)
+    if not columns:
+        return False
+    has_target = bool({"target_id", "target_name", "compound_name", "name"} & columns)
+    has_mass = bool({"mass", "formula", "mz", "target_mz"} & columns)
+    has_rt = bool({"expected_rt_s", "expected_rt", "rt", "retention_time", "rt_range_s"} & columns)
+    return has_target and has_mass and has_rt
+
+
+def looks_like_targeted_samplesheet(path: str | Path) -> bool:
+    columns = table_columns(path)
+    required = {"sample_id", "file_path", "sample_type", "polarity", "batch", "injection_order"}
+    return required.issubset(columns)
+
+
+def student_upload_kind(record: dict, omics_type: str | None = None) -> str:
+    path = record.get("stored_path") or ""
+    category = record.get("category") or "file"
+    if omics_type == "metabolomics":
+        if is_mzml_path(path):
+            return "mzML"
+        if category == "vendor":
+            return "RAW/mzML"
+        if looks_like_targeted_assay(path):
+            return "ASSAY/LIBRARY CSV"
+        if looks_like_targeted_samplesheet(path):
+            return "SAMPLE METADATA CSV"
+        if category == "metadata":
+            return "CSV/TSV"
+    return str(category).upper()
+
+
+def workspace_upload_records(tester_id: str, omics_type: str, project_id: str) -> list[dict]:
+    records = job_store.list_upload_records(tester_id, omics_type, project_id)
+    seen = {record.get("stored_path") for record in records}
+    workspace_uploads = upload_service.list_workspace_uploads(tester_id, omics_type, project_id)
+    for category, items in workspace_uploads.items():
+        if category in {"tester_id", "omics_type", "project_id"}:
+            continue
+        for item in items:
+            path = item.get("path")
+            if not path or path in seen:
+                continue
+            records.append(
+                {
+                    "project_id": project_id,
+                    "tester_id": tester_id,
+                    "omics_type": omics_type,
+                    "session_id": item.get("session_id", ""),
+                    "category": category,
+                    "filename": item.get("name") or Path(path).name,
+                    "stored_path": path,
+                    "size_bytes": item.get("size", 0),
+                    "created_at": item.get("uploaded_at", ""),
+                }
+            )
+            seen.add(path)
+    return records
+
+
 def infer_downstream_selected_inputs(selected_files: dict[str, list[str]]) -> dict[str, str | None]:
     metadata_files = selected_files.get("metadata") or []
     other_files = selected_files.get("other") or []
@@ -194,6 +272,209 @@ def default_airway_downstream_inputs() -> dict[str, str]:
         "metadata": str(airway / "airway_sample_metadata.csv"),
         "contrasts": str(airway / "airway_contrasts.csv"),
     }
+
+
+TARGETED_LCMS_WORKFLOWS = {
+    "targeted_lcms_validate_inputs",
+    "targeted_lcms_peak_detection",
+    "targeted_lcms_rt_alignment_diagnostic",
+    "targeted_lcms_metabolite_quantification",
+    "targeted_lcms_full_pipeline",
+    "targeted_lcms_metaboident_quant",
+    "targeted_lcms_metaboident_chain",
+}
+
+
+def workflow_is_targeted_lcms(workflow_id: str | None) -> bool:
+    return bool(workflow_id and steps_by_id.get(workflow_id, {}).get("targeted_lcms"))
+
+
+def targeted_lcms_mode(workflow_id: str | None) -> str:
+    return str(steps_by_id.get(workflow_id or "", {}).get("targeted_mode", "run"))
+
+
+def targeted_lcms_help(workflow_id: str | None) -> str:
+    return {
+        "targeted_lcms_validate_inputs": "Step 01: checks sample metadata, assay table, mzML loadability, polarity, and RT/mz ranges.",
+        "targeted_lcms_peak_detection": "Step 02: runs MetaboIdent peak detection and writes featureXML plus per-sample diagnostics.",
+        "targeted_lcms_rt_alignment_diagnostic": "Step 03: reports expected-vs-observed RT and drift diagnostics. It does not auto-change assay RT windows.",
+        "targeted_lcms_metabolite_quantification": "Step 04: writes target_by_sample_long.csv, target QC, sample QC, and RT diagnostics.",
+        "targeted_lcms_full_pipeline": "Runs the targeted chain: validate inputs, detect peaks, report RT diagnostics, and export quantification CSVs.",
+        "targeted_lcms_metaboident_quant": "Alias: writes targeted quantification CSVs using MetaboIdent.",
+        "targeted_lcms_metaboident_chain": "Alias: runs the targeted chain from mzML sample sheet to quantification CSVs.",
+    }.get(workflow_id or "", "Required: sample metadata CSV/TSV and targeted assay/library CSV/TSV.")
+
+
+def workflow_is_vendor_conversion(workflow_id: str | None) -> bool:
+    return bool(workflow_id and steps_by_id.get(workflow_id, {}).get("vendor_conversion"))
+
+
+def workflow_is_lcms_module_runner(workflow_id: str | None) -> bool:
+    return bool(workflow_id and steps_by_id.get(workflow_id, {}).get("lcms_module_runner"))
+
+
+def default_targeted_lcms_inputs() -> dict[str, str]:
+    demo = APP_ROOT.parent / "testdatasets" / "targeted_lcms_metaboident"
+    return {
+        "samplesheet": str(demo / "demo_samples.csv"),
+        "assay_table": str(demo / "demo_assay.csv"),
+    }
+
+
+TARGETED_LCMS_TEMPLATE_DIR = APP_ROOT.parent / "testdatasets" / "targeted_lcms_metaboident"
+TARGETED_LCMS_TEMPLATES = {
+    "samples": "targeted_samples_template.csv",
+    "assay": "targeted_assay_template.csv",
+}
+
+
+def targeted_lcms_template_url(kind: str) -> str:
+    return f"{API_PREFIX}/templates/targeted-lcms/{kind}"
+
+
+def targeted_lcms_template_data_uri(kind: str) -> str:
+    filename = TARGETED_LCMS_TEMPLATES[kind]
+    data = (TARGETED_LCMS_TEMPLATE_DIR / filename).read_bytes()
+    encoded = base64.b64encode(data).decode("ascii")
+    return f"data:text/csv;base64,{encoded}"
+
+
+def file_sha256(path: str | Path | None) -> str | None:
+    if not path:
+        return None
+    resolved = Path(path)
+    if not resolved.exists() or not resolved.is_file():
+        return None
+    digest = hashlib.sha256()
+    with resolved.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def read_table_for_preview(path: Path) -> tuple[list[dict[str, str]], list[str]]:
+    first = path.read_text(errors="replace", encoding="utf-8").splitlines()[0]
+    delimiter = "\t" if "\t" in first or path.suffix.lower() == ".tsv" else ","
+    with path.open(newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle, delimiter=delimiter)
+        return list(reader), list(reader.fieldnames or [])
+
+
+def targeted_input_signature(workflow_id: str, inputs: dict[str, str], params: dict[str, str | None] | None = None) -> dict:
+    samplesheet = inputs.get("samplesheet")
+    assay_table = inputs.get("assay_table")
+    sample_files = []
+    sample_ids = []
+    try:
+        rows, _ = read_table_for_preview(Path(samplesheet)) if samplesheet else ([], [])
+        for row in rows:
+            if row.get("sample_id"):
+                sample_ids.append(row["sample_id"])
+            if row.get("file_path"):
+                sample_files.append(str(Path(row["file_path"]).expanduser().resolve()))
+    except Exception:
+        pass
+    return {
+        "mode": workflow_id,
+        "samplesheet": str(Path(samplesheet).resolve()) if samplesheet else None,
+        "samplesheet_sha256": file_sha256(samplesheet),
+        "assay_table": str(Path(assay_table).resolve()) if assay_table else None,
+        "assay_table_sha256": file_sha256(assay_table),
+        "sample_ids": sample_ids,
+        "input_files": sample_files,
+        "input_file_sha256": {path: file_sha256(path) for path in sample_files},
+        "params_json": (params or {}).get("params_json"),
+        "params_json_sha256": file_sha256((params or {}).get("params_json")),
+    }
+
+
+def default_lcms_module_inputs() -> dict[str, str]:
+    return {
+        "input_dir": str(APP_ROOT.parent / "testdatasets" / "mzml"),
+        "sample_sheet": "",
+    }
+
+
+def infer_targeted_lcms_selected_inputs(selected_files: dict[str, list[str]]) -> dict[str, str | None]:
+    candidates = (selected_files.get("metadata") or []) + (selected_files.get("other") or [])
+    samplesheet = next((path for path in candidates if looks_like_targeted_samplesheet(path)), None)
+    assay_table = next((path for path in candidates if looks_like_targeted_assay(path)), None)
+    return {
+        "samplesheet": samplesheet,
+        "assay_table": assay_table or _first_path_matching(candidates, ("assay", "target", "library")),
+    }
+
+
+def is_mzml_path(path: str | Path) -> bool:
+    lower = str(path).lower()
+    return lower.endswith(".mzml") or lower.endswith(".mzml.gz")
+
+
+def sample_id_from_mzml(path: str | Path, index: int) -> str:
+    name = Path(path).name
+    lower = name.lower()
+    for suffix in (".mzml.gz", ".mzml"):
+        if lower.endswith(suffix):
+            name = name[: -len(suffix)]
+            break
+    slug = safe_slug(name)
+    return slug or f"sample_{index}"
+
+
+def write_targeted_samplesheet_from_mzml(run_dir: Path, mzml_files: list[str]) -> str:
+    if not mzml_files:
+        raise ValueError("No selected mzML files were available to build targeted sample metadata.")
+    inputs_dir = run_dir / "inputs"
+    inputs_dir.mkdir(parents=True, exist_ok=True)
+    sample_sheet = inputs_dir / "generated_targeted_samplesheet.csv"
+    rows = []
+    for index, raw_path in enumerate(mzml_files, start=1):
+        path = Path(raw_path).resolve()
+        if not path.exists() or not path.is_file():
+            raise ValueError(f"Selected mzML file does not exist: {raw_path}")
+        if not is_mzml_path(path):
+            raise ValueError(f"Targeted auto-metadata only accepts mzML/mzML.gz files, got: {path.name}")
+        rows.append({
+            "sample_id": sample_id_from_mzml(path, index),
+            "file_path": str(path),
+            "sample_type": "sample",
+            "polarity": "positive",
+            "batch": "batch1",
+            "injection_order": str(index),
+        })
+    with sample_sheet.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=["sample_id", "file_path", "sample_type", "polarity", "batch", "injection_order"])
+        writer.writeheader()
+        writer.writerows(rows)
+    return str(sample_sheet)
+
+
+def write_lcms_samplesheet_from_mzml(run_dir: Path, mzml_files: list[str], filename: str = "generated_lcms_samplesheet.csv") -> str:
+    if not mzml_files:
+        raise ValueError("No selected mzML files were available to build LC-MS sample metadata.")
+    inputs_dir = run_dir / "inputs"
+    inputs_dir.mkdir(parents=True, exist_ok=True)
+    sample_sheet = inputs_dir / filename
+    rows = []
+    for index, raw_path in enumerate(mzml_files, start=1):
+        path = Path(raw_path).resolve()
+        if not path.exists() or not path.is_file():
+            raise ValueError(f"Selected mzML file does not exist: {raw_path}")
+        if not is_mzml_path(path):
+            raise ValueError(f"LC-MS auto-metadata only accepts mzML/mzML.gz files, got: {path.name}")
+        rows.append({
+            "sample_id": sample_id_from_mzml(path, index),
+            "file_path": str(path),
+            "sample_type": "sample",
+            "polarity": "positive",
+            "batch": "batch1",
+            "injection_order": str(index),
+        })
+    with sample_sheet.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=["sample_id", "file_path", "sample_type", "polarity", "batch", "injection_order"])
+        writer.writeheader()
+        writer.writerows(rows)
+    return str(sample_sheet)
 
 
 DOWNSTREAM_STEP_DIRS = {
@@ -355,6 +636,690 @@ def downstream_demo_support_files(run_dir: Path, counts: str) -> dict[str, str]:
         handle.write("DASH_SET_2\tdash mini set 2\t" + "\t".join(genes[10:20]) + "\n")
         handle.write("DASH_SET_3\tdash mini set 3\t" + "\t".join(genes[20:30]) + "\n")
     return {"gene_mapping": str(gene_mapping), "gmt": str(gmt)}
+
+
+def write_targeted_params_profile(run_dir: Path, values: dict[str, str | None]) -> str | None:
+    params = {}
+    for key, raw_value in values.items():
+        value = normalize_empty(raw_value)
+        if value is None:
+            continue
+        if key in {"extract:n_isotopes", "EMGScoring:max_iteration"}:
+            params[key] = int(value)
+        elif key in {
+            "extract:mz_window",
+            "extract:rt_window",
+            "detect:peak_width",
+            "detect:min_peak_width",
+            "detect:signal_to_noise",
+        }:
+            params[key] = float(value)
+        else:
+            params[key] = value
+    if not params:
+        return None
+    profile = run_dir / "targeted_metaboident_params.json"
+    profile.write_text(json.dumps({"parameters": params}, indent=2), encoding="utf-8")
+    return str(profile)
+
+
+def start_lcms_module_dash_job(
+    workflow_id: str,
+    tester_id: str,
+    omics_type: str,
+    project_id: str,
+    session_id: str,
+    input_dir: str | None,
+    sample_sheet: str | None,
+    selected_mzml_files: list[str] | None = None,
+) -> dict:
+    run_id = f"{workflow_id}_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+    run_dir = APP_ROOT / "runs" / safe_slug(omics_type) / safe_slug(tester_id) / safe_slug(project_id) / run_id
+    results_dir = run_dir / "results"
+    logs_dir = run_dir / "logs"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    command = [
+        str(APP_ROOT.parent / "scripts" / "test_metabolite_steps.sh"),
+        "--outdir", str(results_dir),
+    ]
+    selected_mzml_files = selected_mzml_files or []
+    generated_sample_sheet = None
+    if not sample_sheet and selected_mzml_files:
+        generated_sample_sheet = write_lcms_samplesheet_from_mzml(run_dir, selected_mzml_files)
+        sample_sheet = generated_sample_sheet
+    if sample_sheet:
+        command.extend(["--sample-sheet", sample_sheet])
+    else:
+        command.extend(["--input-dir", input_dir or default_lcms_module_inputs()["input_dir"]])
+    mode = steps_by_id.get(workflow_id, {}).get("lcms_mode")
+    if mode == "feature_detection":
+        command.append("--run-feature-detection")
+    elif mode == "matrix_qc":
+        command.append("--run-integration-qc")
+    request_data = {
+        "run_id": run_id,
+        "workflow_id": workflow_id,
+        "tester_id": tester_id,
+        "omics_type": omics_type,
+        "project_id": project_id,
+        "input_dir": input_dir,
+        "sample_sheet": sample_sheet,
+        "generated_sample_sheet": generated_sample_sheet,
+        "selected_mzml_files": selected_mzml_files,
+        "results_dir": str(results_dir),
+        "mode": mode,
+    }
+    (run_dir / "lcms_module_request.json").write_text(json.dumps(request_data, indent=2), encoding="utf-8")
+    wrapper = run_dir / "run_lcms_module_job.sh"
+    job_record = run_dir / "job_record.json"
+    quoted_command = " ".join(shlex.quote(str(part)) for part in command)
+    stdout_log = shlex.quote(str(logs_dir / "stdout.log"))
+    stderr_log = shlex.quote(str(logs_dir / "stderr.log"))
+    wrapper.write_text(
+        "#!/usr/bin/env bash\n"
+        "set +e\n"
+        f"{quoted_command} > {stdout_log} 2> {stderr_log}\n"
+        "code=$?\n"
+        f"python3 - <<'PY' \"$code\" \"{job_record}\"\n"
+        "import json, sys\n"
+        "from datetime import datetime, timezone\n"
+        "code = int(sys.argv[1])\n"
+        "path = sys.argv[2]\n"
+        "json.dump({\n"
+        "  'status': 'succeeded' if code == 0 else 'failed',\n"
+        "  'exit_code': code,\n"
+        "  'finished_at': datetime.now(timezone.utc).isoformat(),\n"
+        "}, open(path, 'w'), indent=2)\n"
+        "PY\n"
+        "exit $code\n",
+        encoding="utf-8",
+    )
+    wrapper.chmod(0o755)
+    proc = subprocess.Popen(["bash", str(wrapper)], cwd=APP_ROOT.parent)
+    job_id = f"job_{run_id}"
+    metadata_json = {
+        "request_path": str(run_dir / "lcms_module_request.json"),
+        "submitted_params": {"input_dir": input_dir, "sample_sheet": sample_sheet, "mode": mode},
+        "selected_files": {
+            "metadata": [sample_sheet] if sample_sheet else [],
+            "fastq": [],
+            "reference": [],
+            "vendor": selected_mzml_files,
+            "other": [],
+        },
+    }
+    job_store.upsert_job({
+        "job_id": job_id,
+        "run_id": run_id,
+        "session_id": session_id,
+        "tester_id": tester_id,
+        "tester_label": tester_label(tester_id),
+        "omics_type": omics_type,
+        "project_id": project_id,
+        "project_label": project_label_from_id(project_id),
+        "workflow_id": workflow_id,
+        "status": "running",
+        "pid": proc.pid,
+        "run_dir": str(run_dir),
+        "compiled_dir": str(run_dir),
+        "results_dir": str(results_dir),
+        "command": " ".join(command),
+        "stdout_path": str(logs_dir / "stdout.log"),
+        "stderr_path": str(logs_dir / "stderr.log"),
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "metadata_json": json.dumps(metadata_json),
+    })
+    return {"run_id": run_id, "job_id": job_id, "run_dir": str(run_dir), "job_path": str(run_dir / "lcms_module_request.json"), "job_type": "lcms_module"}
+
+
+def start_targeted_lcms_dash_job(
+    workflow_id: str,
+    tester_id: str,
+    omics_type: str,
+    project_id: str,
+    session_id: str,
+    inputs: dict[str, str],
+    params: dict[str, str | None] | None = None,
+    selected_mzml_files: list[str] | None = None,
+) -> dict:
+    run_id = f"{workflow_id}_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+    run_dir = APP_ROOT / "runs" / safe_slug(omics_type) / safe_slug(tester_id) / safe_slug(project_id) / run_id
+    results_dir = run_dir / "results"
+    logs_dir = run_dir / "logs"
+    job_id = f"job_{run_id}"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    if not inputs.get("samplesheet") and selected_mzml_files:
+        inputs = dict(inputs)
+        inputs["samplesheet"] = write_targeted_samplesheet_from_mzml(run_dir, selected_mzml_files)
+    input_signature = targeted_input_signature(workflow_id, inputs, params)
+    request_data = {
+        "run_id": run_id,
+        "job_id": job_id,
+        "workflow_id": workflow_id,
+        "tester_id": tester_id,
+        "omics_type": omics_type,
+        "project_id": project_id,
+        "inputs": inputs,
+        "params": params or {},
+        "input_signature": input_signature,
+        "results_dir": str(results_dir),
+    }
+    (run_dir / "targeted_lcms_request.json").write_text(json.dumps(request_data, indent=2), encoding="utf-8")
+    script = str(APP_ROOT.parent / "scripts" / "run_targeted_lcms_metaboident.sh")
+    command = [
+        script,
+        "--samplesheet", inputs["samplesheet"],
+        "--assay-table", inputs["assay_table"],
+        "--outdir", str(results_dir),
+    ]
+    if targeted_lcms_mode(workflow_id) == "validate":
+        command.append("--validate-only")
+    params_json = (params or {}).get("params_json")
+    if params_json:
+        command.extend(["--params-json", params_json])
+
+    wrapper = run_dir / "run_targeted_lcms_job.sh"
+    job_record = run_dir / "job_record.json"
+    quoted_command = " ".join(shlex.quote(str(part)) for part in command)
+    stdout_log = shlex.quote(str(logs_dir / "stdout.log"))
+    stderr_log = shlex.quote(str(logs_dir / "stderr.log"))
+    wrapper.write_text(
+        "#!/usr/bin/env bash\n"
+        "set +e\n"
+        f"export SURVOM_RUN_ID={shlex.quote(run_id)}\n"
+        f"export SURVOM_JOB_ID={shlex.quote(job_id)}\n"
+        f"export SURVOM_WORKFLOW_ID={shlex.quote(workflow_id)}\n"
+        f"{quoted_command} > {stdout_log} 2> {stderr_log}\n"
+        "code=$?\n"
+        f"python3 - <<'PY' \"$code\" \"{job_record}\"\n"
+        "import json, sys\n"
+        "from datetime import datetime, timezone\n"
+        "code = int(sys.argv[1])\n"
+        "path = sys.argv[2]\n"
+        "json.dump({\n"
+        "  'status': 'succeeded' if code == 0 else 'failed',\n"
+        "  'exit_code': code,\n"
+        "  'finished_at': datetime.now(timezone.utc).isoformat(),\n"
+        "}, open(path, 'w'), indent=2)\n"
+        "PY\n"
+        "exit $code\n",
+        encoding="utf-8",
+    )
+    wrapper.chmod(0o755)
+    started_at = datetime.now(timezone.utc).isoformat()
+    proc = subprocess.Popen(["bash", str(wrapper)], cwd=APP_ROOT.parent)
+    metadata_json = {
+        "request_path": str(run_dir / "targeted_lcms_request.json"),
+        "input_signature": input_signature,
+        "cache_key": hashlib.sha256(json.dumps(input_signature, sort_keys=True).encode("utf-8")).hexdigest(),
+        "submitted_params": {
+            **inputs,
+            **(params or {}),
+            "input_signature": input_signature,
+            "output_mode": "csv_json_featurexml",
+        },
+        "selected_files": {
+            "metadata": [value for value in inputs.values() if value],
+            "fastq": [],
+            "reference": [],
+            "other": [],
+        },
+    }
+    job_store.upsert_job({
+        "job_id": job_id,
+        "run_id": run_id,
+        "session_id": session_id,
+        "tester_id": tester_id,
+        "tester_label": tester_label(tester_id),
+        "omics_type": omics_type,
+        "project_id": project_id,
+        "project_label": project_label_from_id(project_id),
+        "workflow_id": workflow_id,
+        "status": "running",
+        "pid": proc.pid,
+        "run_dir": str(run_dir),
+        "compiled_dir": str(run_dir),
+        "results_dir": str(results_dir),
+        "command": " ".join(command),
+        "stdout_path": str(logs_dir / "stdout.log"),
+        "stderr_path": str(logs_dir / "stderr.log"),
+        "started_at": started_at,
+        "metadata_json": json.dumps(metadata_json),
+    })
+    return {"run_id": run_id, "job_id": job_id, "run_dir": str(run_dir), "job_path": str(run_dir / "targeted_lcms_request.json"), "job_type": "targeted_lcms"}
+
+
+def vendor_sample_id(path: str, index: int) -> str:
+    name = Path(path).name
+    lower = name.lower()
+    for suffix in (".mzml.gz", ".mzml", ".raw", ".zip", ".tar.gz", ".tgz", ".tar", ".d"):
+        if lower.endswith(suffix):
+            name = name[: -len(suffix)]
+            break
+    sample_id = safe_slug(name, f"sample_{index}")
+    return sample_id or f"sample_{index}"
+
+
+def vendor_archive_stem(path: Path) -> str:
+    lower = path.name.lower()
+    for suffix in (".tar.gz", ".tgz", ".zip", ".tar"):
+        if lower.endswith(suffix):
+            return path.name[: -len(suffix)]
+    return path.stem
+
+
+def is_vendor_archive(path: Path) -> bool:
+    return path.name.lower().endswith((".zip", ".tar", ".tar.gz", ".tgz"))
+
+
+def safe_extract_zip(archive: Path, destination: Path) -> None:
+    destination.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(archive) as handle:
+        for member in handle.infolist():
+            target = (destination / member.filename).resolve()
+            if not is_relative_to(target, destination.resolve()):
+                raise ValueError(f"Archive contains an unsafe path: {member.filename}")
+        handle.extractall(destination)
+
+
+def safe_extract_tar(archive: Path, destination: Path) -> None:
+    destination.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(archive) as handle:
+        for member in handle.getmembers():
+            target = (destination / member.name).resolve()
+            if not is_relative_to(target, destination.resolve()):
+                raise ValueError(f"Archive contains an unsafe path: {member.name}")
+        handle.extractall(destination)
+
+
+def extract_vendor_archive(archive: Path, extraction_root: Path) -> Path:
+    destination = extraction_root / safe_slug(vendor_archive_stem(archive))
+    if destination.exists():
+        shutil.rmtree(destination)
+    if archive.name.lower().endswith(".zip"):
+        safe_extract_zip(archive, destination)
+    else:
+        safe_extract_tar(archive, destination)
+    return destination
+
+
+def infer_d_vendor_format(d_dir: Path) -> str:
+    names = {path.name.lower() for path in d_dir.iterdir()} if d_dir.is_dir() else set()
+    if {"analysis.baf", "analysis.tdf", "analysis.tsf"} & names:
+        return "bruker"
+    return "agilent"
+
+
+def vendor_inputs_from_upload(path: Path, extraction_root: Path) -> list[tuple[Path, str]]:
+    path = path.resolve()
+    if is_vendor_archive(path):
+        extracted = extract_vendor_archive(path, extraction_root)
+        d_dirs = sorted(candidate for candidate in extracted.rglob("*") if candidate.is_dir() and candidate.name.lower().endswith(".d"))
+        if d_dirs:
+            return [(candidate, infer_d_vendor_format(candidate)) for candidate in d_dirs]
+        files = sorted(
+            candidate
+            for candidate in extracted.rglob("*")
+            if candidate.is_file() and candidate.name.lower().endswith((".raw", ".mzml", ".mzml.gz"))
+        )
+        return [(candidate, "") for candidate in files]
+    return [(path, infer_d_vendor_format(path) if path.is_dir() and path.name.lower().endswith(".d") else "")]
+
+
+def write_generated_vendor_samplesheet(samplesheet_path: Path, vendor_files: list[str]) -> None:
+    samplesheet_path.parent.mkdir(parents=True, exist_ok=True)
+    extraction_root = samplesheet_path.parent / "vendor_extracted"
+    seen = set()
+    with samplesheet_path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=["sample_id", "file_path", "sample_type", "polarity", "batch", "injection_order", "vendor_format"],
+        )
+        writer.writeheader()
+        injection_order = 1
+        for raw_path in vendor_files:
+            for resolved, vendor_format in vendor_inputs_from_upload(Path(raw_path), extraction_root):
+                sample_id = vendor_sample_id(str(resolved), injection_order)
+                original = sample_id
+                counter = 2
+                while sample_id in seen:
+                    sample_id = f"{original}_{counter}"
+                    counter += 1
+                seen.add(sample_id)
+                writer.writerow(
+                    {
+                        "sample_id": sample_id,
+                        "file_path": str(resolved),
+                        "sample_type": "sample",
+                        "polarity": "positive",
+                        "batch": "batch1",
+                        "injection_order": injection_order,
+                        "vendor_format": vendor_format,
+                    }
+                )
+                injection_order += 1
+        if injection_order == 1:
+            raise ValueError("No supported vendor inputs were found in the selected files or archives.")
+
+
+def start_vendor_conversion_dash_job(
+    workflow_id: str,
+    tester_id: str,
+    omics_type: str,
+    project_id: str,
+    session_id: str,
+    samplesheet: str | None,
+    vendor_files: list[str] | None = None,
+) -> dict:
+    run_id = f"{workflow_id}_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+    run_dir = APP_ROOT / "runs" / safe_slug(omics_type) / safe_slug(tester_id) / safe_slug(project_id) / run_id
+    results_dir = run_dir / "results"
+    logs_dir = run_dir / "logs"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    inputs_dir = run_dir / "inputs"
+    inputs_dir.mkdir(parents=True, exist_ok=True)
+    vendor_files = vendor_files or []
+    if not samplesheet:
+        samplesheet_path = inputs_dir / "generated_vendor_samplesheet.csv"
+        write_generated_vendor_samplesheet(samplesheet_path, vendor_files)
+        samplesheet = str(samplesheet_path)
+    request_data = {
+        "run_id": run_id,
+        "workflow_id": workflow_id,
+        "tester_id": tester_id,
+        "omics_type": omics_type,
+        "project_id": project_id,
+        "samplesheet": samplesheet,
+        "vendor_files": vendor_files,
+        "results_dir": str(results_dir),
+    }
+    (run_dir / "vendor_conversion_request.json").write_text(json.dumps(request_data, indent=2), encoding="utf-8")
+    command = [
+        str(APP_ROOT.parent / "scripts" / "run_vendor_msconvert_step0.sh"),
+        "--samplesheet", samplesheet,
+        "--outdir", str(results_dir),
+    ]
+    wrapper = run_dir / "run_vendor_conversion_job.sh"
+    job_record = run_dir / "job_record.json"
+    quoted_command = " ".join(shlex.quote(str(part)) for part in command)
+    stdout_log = shlex.quote(str(logs_dir / "stdout.log"))
+    stderr_log = shlex.quote(str(logs_dir / "stderr.log"))
+    wrapper.write_text(
+        "#!/usr/bin/env bash\n"
+        "set +e\n"
+        f"{quoted_command} > {stdout_log} 2> {stderr_log}\n"
+        "code=$?\n"
+        f"python3 - <<'PY' \"$code\" \"{job_record}\"\n"
+        "import json, sys\n"
+        "from datetime import datetime, timezone\n"
+        "code = int(sys.argv[1])\n"
+        "path = sys.argv[2]\n"
+        "json.dump({\n"
+        "  'status': 'succeeded' if code == 0 else 'failed',\n"
+        "  'exit_code': code,\n"
+        "  'finished_at': datetime.now(timezone.utc).isoformat(),\n"
+        "}, open(path, 'w'), indent=2)\n"
+        "PY\n"
+        "exit $code\n",
+        encoding="utf-8",
+    )
+    wrapper.chmod(0o755)
+    proc = subprocess.Popen(["bash", str(wrapper)], cwd=APP_ROOT.parent)
+    job_id = f"job_{run_id}"
+    metadata_json = {
+        "request_path": str(run_dir / "vendor_conversion_request.json"),
+        "submitted_params": {"samplesheet": samplesheet, "conversion_mode": "docker_msconvert"},
+        "selected_files": {"metadata": [samplesheet], "fastq": [], "reference": [], "vendor": vendor_files, "other": []},
+    }
+    job_store.upsert_job({
+        "job_id": job_id,
+        "run_id": run_id,
+        "session_id": session_id,
+        "tester_id": tester_id,
+        "tester_label": tester_label(tester_id),
+        "omics_type": omics_type,
+        "project_id": project_id,
+        "project_label": project_label_from_id(project_id),
+        "workflow_id": workflow_id,
+        "status": "running",
+        "pid": proc.pid,
+        "run_dir": str(run_dir),
+        "compiled_dir": str(run_dir),
+        "results_dir": str(results_dir),
+        "command": " ".join(command),
+        "stdout_path": str(logs_dir / "stdout.log"),
+        "stderr_path": str(logs_dir / "stderr.log"),
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "metadata_json": json.dumps(metadata_json),
+    })
+    return {"run_id": run_id, "job_id": job_id, "run_dir": str(run_dir), "job_path": str(run_dir / "vendor_conversion_request.json"), "job_type": "vendor_conversion"}
+
+
+def refresh_simple_wrapper_job(job: dict) -> dict:
+    run_dir = Path(job.get("run_dir") or "")
+    record_path = run_dir / "job_record.json"
+    if record_path.exists():
+        record = json.loads(record_path.read_text(errors="replace"))
+        job_store.update_job(
+            job["job_id"],
+            status=record.get("status", job.get("status")),
+            finished_at=record.get("finished_at"),
+            exit_code=record.get("exit_code"),
+        )
+        return job_store.get_job(job["job_id"]) or job
+    if str(job.get("status", "")).lower() == "running" and job.get("pid"):
+        try:
+            os.kill(int(job["pid"]), 0)
+        except OSError:
+            job_store.update_job(job["job_id"], status="unknown")
+            return job_store.get_job(job["job_id"]) or job
+    return job
+
+
+def read_text_tail(path: str | Path | None, max_chars: int = 4000) -> str:
+    if not path:
+        return ""
+    resolved = Path(path)
+    if not resolved.exists() or not resolved.is_file():
+        return ""
+    try:
+        size = resolved.stat().st_size
+        with resolved.open("rb") as handle:
+            handle.seek(max(0, size - max_chars * 2))
+            data = handle.read()
+        return data.decode("utf-8", errors="replace")[-max_chars:]
+    except Exception:
+        return ""
+
+
+def collect_result_files_by_step(results: Path) -> tuple[list[str], dict[str, list[str]]]:
+    if not results.exists():
+        return [], {}
+    files = []
+    by_step: dict[str, list[str]] = {}
+    for path in results.rglob("*"):
+        if not path.is_file():
+            continue
+        path_str = str(path)
+        files.append(path_str)
+        try:
+            relative = path.relative_to(results)
+            step_id = relative.parts[0] if len(relative.parts) > 1 else "results"
+        except ValueError:
+            step_id = "results"
+        by_step.setdefault(step_id, []).append(path_str)
+    files.sort()
+    for step_files in by_step.values():
+        step_files.sort()
+    return files, by_step
+
+
+def simple_results_execution_record(job: dict) -> dict:
+    results = Path(job.get("results_dir") or "")
+    files, files_by_step = collect_result_files_by_step(results)
+    steps = []
+    for step_dir in sorted(path for path in results.glob("*") if path.is_dir()) if results.exists() else []:
+        status = "completed"
+        tasks = []
+        conversion_manifest = step_dir / "conversion_manifest.json"
+        if conversion_manifest.exists():
+            try:
+                conversion_data = json.loads(conversion_manifest.read_text(errors="replace"))
+                failed_samples = [
+                    sample
+                    for sample in conversion_data.get("samples", [])
+                    if str(sample.get("conversion_status") or sample.get("status") or "").lower() == "failed"
+                ]
+                if failed_samples:
+                    status = "failed"
+                    first = failed_samples[0]
+                    tasks.append(
+                        {
+                            "stderr_tail": first.get("error_message") or "Conversion failed.",
+                            "log_tail": first.get("error_message") or "Conversion failed.",
+                            "work_dir": str(step_dir),
+                        }
+                    )
+            except Exception as exc:
+                status = "failed"
+                tasks.append({"stderr_tail": f"Could not read conversion manifest: {exc}", "work_dir": str(step_dir)})
+        steps.append({
+            "step_id": step_dir.name,
+            "step_name": step_dir.name,
+            "process_name": step_dir.name.upper(),
+            "status": status,
+            "outputs": [{"name": Path(path).name, "files": [path], "count": 1} for path in files_by_step.get(step_dir.name, [])],
+            "missing_outputs": [],
+            "tasks": tasks,
+            "dependencies": [],
+        })
+    return {
+        "run_id": job.get("run_id"),
+        "status": job.get("status"),
+        "step_outputs": steps,
+        "all_result_files": files,
+        "task_artifacts": [],
+    }
+
+
+def targeted_manifest_summary(files: list[str]):
+    manifests = [Path(path) for path in files if path.endswith("run_manifest.json")]
+    if not manifests:
+        return None
+    manifest_path = manifests[0]
+    try:
+        manifest = json.loads(manifest_path.read_text(errors="replace"))
+    except Exception as exc:
+        return dbc.Alert(f"Could not read targeted run manifest: {exc}", color="warning")
+    provenance = manifest.get("input_provenance") or {}
+    sample_rows = []
+    for item in provenance.get("mzml_inputs") or []:
+        sample_rows.append(
+            html.Li(
+                f"{item.get('sample_id') or 'sample'}: {item.get('filename') or Path(str(item.get('path', ''))).name} "
+                f"({item.get('polarity') or 'polarity not set'})"
+            )
+        )
+    return html.Div(
+        [
+            html.H6("Targeted LC-MS input provenance", className="mt-3"),
+            html.Ul(
+                [
+                    html.Li(f"Job ID: {manifest.get('job_id') or 'not recorded'}"),
+                    html.Li(f"Run ID: {manifest.get('run_id') or 'not recorded'}"),
+                    html.Li(f"Sample metadata: {Path(str((provenance.get('samplesheet') or {}).get('path', ''))).name}"),
+                    html.Li(f"Assay table: {Path(str((provenance.get('assay_table') or {}).get('path', ''))).name}"),
+                    html.Li(f"Target count: {manifest.get('target_count')}"),
+                    html.Li(f"Run manifest: {manifest_path.name}"),
+                ],
+                className="small ps-3 mb-1",
+            ),
+            html.Div([html.Strong("Input mzML files"), html.Ul(sample_rows or [html.Li("No mzML inputs recorded.")], className="small ps-3 mb-0")]),
+        ]
+    )
+
+
+def workspace_file_link(path: str, label: str, session_id: str, tester_id: str, omics_type: str, project_id: str):
+    return html.A(
+        label,
+        href=(
+            f"{API_PREFIX}/file?path={path}"
+            f"&session_id={session_id}&tester_id={tester_id}&omics_type={omics_type}&project_id={project_id}"
+        ),
+        target="_blank",
+    )
+
+
+def targeted_quick_files(files: list[str], job: dict, session_id: str, tester_id: str, omics_type: str, project_id: str):
+    wanted = [
+        ("Assay validation CSV", "01_validate_inputs/validated_assay_library.csv"),
+        ("Sample/mzML validation CSV", "01_validate_inputs/mzml_validation.csv"),
+        ("Run manifest", "run_manifest.json"),
+        ("Target quantification CSV", "03_target_matrix/target_by_sample_long.csv"),
+        ("RT diagnostic CSV", "04_qc/expected_vs_observed_rt.csv"),
+    ]
+    links = []
+    for label, suffix in wanted:
+        match = next((path for path in files if path.endswith(suffix)), None)
+        if match:
+            links.append(html.Li(workspace_file_link(match, label, session_id, tester_id, omics_type, project_id)))
+    for label, key in (("STDOUT log", "stdout_path"), ("STDERR log", "stderr_path")):
+        path = job.get(key)
+        if path and Path(path).exists():
+            links.append(html.Li(workspace_file_link(path, label, session_id, tester_id, omics_type, project_id)))
+    if not links:
+        return None
+    return dbc.Alert(
+        [
+            html.Strong("Targeted LC-MS important files"),
+            html.Div("For assay problems, open Assay validation CSV first, then STDERR log if the run failed.", className="small mt-1"),
+            html.Ul(links, className="small mb-0 mt-2"),
+        ],
+        color="info",
+        className="py-2",
+    )
+
+
+def recent_jobs_summary(jobs: list[dict]) -> html.Div:
+    if not jobs:
+        return html.Div("No previous jobs in this workspace.", className="small text-muted")
+    items = []
+    for job in jobs[:8]:
+        workflow_id = job.get("workflow_id") or "workflow"
+        workflow_label = steps_by_id.get(workflow_id, {}).get("label", workflow_id)
+        status = str(job.get("status") or "unknown")
+        color = {
+            "succeeded": "success",
+            "completed": "success",
+            "running": "primary",
+            "failed": "danger",
+            "error": "danger",
+        }.get(status.lower(), "secondary")
+        timestamp = job.get("finished_at") or job.get("started_at") or job.get("created_at") or ""
+        items.append(
+            dbc.ListGroupItem(
+                [
+                    html.Div(
+                        [
+                            html.Strong(workflow_label),
+                            dbc.Badge(status, color=color, className="ms-2"),
+                        ],
+                        className="mb-1",
+                    ),
+                    html.Div(f"Run: {job.get('run_id') or 'not recorded'}", className="small text-muted"),
+                    html.Div(timestamp, className="small text-muted") if timestamp else None,
+                ]
+            )
+        )
+    return html.Div(
+        [
+            html.H6("Recent jobs in this workspace"),
+            dbc.ListGroup(items, flush=True, className="small"),
+        ]
+    )
 
 
 def start_downstream_dash_job(
@@ -540,7 +1505,7 @@ def refresh_downstream_job(job: dict) -> dict:
 
 def downstream_execution_record(job: dict) -> dict:
     results = Path(job.get("results_dir") or "")
-    files = sorted(str(path) for path in results.rglob("*") if path.is_file()) if results.exists() else []
+    files, files_by_step = collect_result_files_by_step(results)
     steps = []
     for step_dir in sorted(path for path in results.glob("*") if path.is_dir()) if results.exists() else []:
         steps.append({
@@ -548,7 +1513,7 @@ def downstream_execution_record(job: dict) -> dict:
             "step_name": step_dir.name,
             "process_name": step_dir.name.upper(),
             "status": "completed",
-            "outputs": [{"name": path.name, "files": [str(path)], "count": 1} for path in step_dir.iterdir() if path.is_file()],
+            "outputs": [{"name": Path(path).name, "files": [path], "count": 1} for path in files_by_step.get(step_dir.name, [])],
             "missing_outputs": [],
             "tasks": [],
             "dependencies": [],
@@ -596,6 +1561,208 @@ def downstream_parameter_panel():
             ),
         ],
         "downstream-params",
+    )
+
+
+def targeted_lcms_parameter_panel():
+    defaults = default_targeted_lcms_inputs()
+    def param_row(input_id: str, label: str, placeholder: str, help_text: str):
+        return html.Div(
+            [
+                dbc.Label(label, className="small fw-semibold"),
+                dbc.Input(id=input_id, type="number", placeholder=placeholder, size="sm", className="mb-1"),
+                html.Div(help_text, className="small text-muted mb-2"),
+            ]
+        )
+    return workflow_section(
+        "Targeted LC-MS inputs",
+        [
+            html.P(
+                "Targeted workflow: mzML files + assay/library CSV -> peak detection -> RT diagnostics -> metabolite quantification CSV.",
+                className="small text-muted",
+            ),
+            html.Div(
+                "Easy mode: upload mzML, upload assay CSV, choose the assay in the dropdown below, then run.",
+                className="small fw-bold text-primary mb-2",
+            ),
+            dbc.Alert(
+                [
+                    html.Div(
+                        [
+                            html.Strong("IMPORTANT targeted input: "),
+                            html.Span("download the CSV templates before running."),
+                        ],
+                        className="text-danger fw-bold mb-2",
+                    ),
+                    html.Div(
+                        [
+                            html.A(
+                                "Download sample metadata template",
+                                href=targeted_lcms_template_data_uri("samples"),
+                                download="targeted_samples_template.csv",
+                                className="btn btn-primary btn-sm me-2 mb-2 fw-bold",
+                            ),
+                            html.A(
+                                "Download assay/library template",
+                                href=targeted_lcms_template_data_uri("assay"),
+                                download="targeted_assay_template.csv",
+                                className="btn btn-danger btn-sm mb-2 fw-bold",
+                            ),
+                        ],
+                    ),
+                    html.Div(
+                        [
+                            html.Strong("Assay/library is required. "),
+                            html.Span("Minimum columns: target_id, target_name, mass or formula, charge, expected_rt_s, rt_range_s, polarity."),
+                        ],
+                        className="small",
+                    ),
+                ],
+                color="warning",
+                className="small py-2 border border-danger",
+            ),
+            html.Div(id="targeted-lcms-required-help", className="small text-primary mb-2"),
+            dbc.Alert(
+                "Simple mode: upload/select mzML files and an assay CSV. Leave sample metadata blank unless you need blanks, QC, negative mode, or custom sample labels.",
+                color="info",
+                className="small py-2",
+            ),
+            html.Div(
+                [
+                    dbc.Label("Choose uploaded assay/library CSV", className="small fw-bold text-danger"),
+                    dbc.Select(
+                        id="targeted-assay-upload-select",
+                        options=[],
+                        value="",
+                        size="sm",
+                        className="mb-1",
+                    ),
+                    html.Div(
+                        id="targeted-assay-select-message",
+                        className="small text-muted mb-2",
+                    ),
+                ]
+            ),
+            html.Details(
+                [
+                    html.Summary("Advanced: paths used by the app", className="fw-semibold small mb-2"),
+                    html.Div(
+                        [
+                            dbc.Label("Sample metadata CSV/TSV path", className="small fw-semibold"),
+                            dbc.Input(
+                                id="targeted-lcms-samplesheet-input",
+                                type="text",
+                                placeholder=defaults["samplesheet"],
+                                size="sm",
+                                className="mb-1",
+                            ),
+                            html.Div(
+                                "Optional when mzML files are selected. Required for blanks/QC/custom polarity.",
+                                className="small text-muted mb-2",
+                            ),
+                        ]
+                    ),
+                    html.Div(
+                        [
+                            dbc.Label("Assay/library CSV/TSV path", className="small fw-semibold"),
+                            dbc.Input(
+                                id="targeted-lcms-assay-input",
+                                type="text",
+                                placeholder=defaults["assay_table"],
+                                size="sm",
+                                className="mb-1",
+                            ),
+                            html.Div(
+                                "Required target list. This fills automatically when an uploaded assay CSV is selected.",
+                                className="small text-muted mb-2",
+                            ),
+                        ]
+                    ),
+                ],
+            ),
+            html.Details(
+                [
+                    html.Summary("Advanced MetaboIdent parameters", className="fw-semibold small mb-2"),
+                    param_row("targeted-param-mz-window", "Mass extraction window", "10", "OpenMS key extract:mz_window. Smaller is stricter; larger catches more candidates."),
+                    param_row("targeted-param-rt-window", "RT extraction window, seconds", "60", "OpenMS key extract:rt_window. Leave blank to use installed OpenMS default."),
+                    param_row("targeted-param-snr", "Signal-to-noise", "0.8", "OpenMS key detect:signal_to_noise. Higher is stricter."),
+                    param_row("targeted-param-peak-width", "Expected peak width, seconds", "60", "OpenMS key detect:peak_width."),
+                    html.Hr(),
+                    dbc.Label("Optional params JSON path", className="small fw-semibold"),
+                    dbc.Input(
+                        id="targeted-lcms-params-json-input",
+                        type="text",
+                        placeholder="/path/to/metaboident_params.json",
+                        size="sm",
+                        className="mb-1",
+                    ),
+                    html.Div("Keys must match FeatureFinderAlgorithmMetaboIdent OpenMS parameter names, for example extract:mz_window.", className="small text-muted mb-2"),
+                ],
+                className="advanced-options mt-2",
+            ),
+        ],
+        "targeted-lcms-params",
+    )
+
+
+def lcms_module_parameter_panel():
+    defaults = default_lcms_module_inputs()
+    return workflow_section(
+        "Metabolomics mzML workflow inputs",
+        [
+            html.P(
+                "Runs existing LC-MS atomic stages with the same command-line helper used in tests. Existing mzML skips vendor conversion.",
+                className="small text-muted",
+            ),
+            html.Div(id="lcms-module-required-help", className="small text-primary mb-2"),
+            dbc.Label("mzML input folder", className="small fw-semibold"),
+            dbc.Input(
+                id="lcms-input-dir-input",
+                type="text",
+                value=defaults["input_dir"],
+                placeholder="/path/to/mzml_folder",
+                size="sm",
+                className="mb-1",
+            ),
+            html.Div("Used when sample sheet is blank. The folder should contain .mzML/.mzML.gz files.", className="small text-muted mb-2"),
+            dbc.Label("Optional LC-MS sample sheet CSV/TSV", className="small fw-semibold"),
+            dbc.Input(
+                id="lcms-samplesheet-input",
+                type="text",
+                placeholder="/path/to/lcms_samples.csv",
+                size="sm",
+                className="mb-1",
+            ),
+            html.Div("Columns: sample_id,file_path,sample_type,polarity,batch,injection_order.", className="small text-muted"),
+        ],
+        "lcms-module-params",
+    )
+
+
+def vendor_conversion_panel():
+    return workflow_section(
+        "Step 0 vendor conversion",
+        [
+            html.P(
+                "Convert native Thermo .raw, Agilent .d, or Bruker .d input to mzML with pinned ProteoWizard Docker msconvert.",
+                className="small text-muted",
+            ),
+            html.Div(
+                "For browser-uploaded Thermo RAW, mzML, or zipped Agilent/Bruker .d examples, select the uploaded vendor files and leave this field blank. "
+                "The app will create a simple positive-mode sample sheet for the run. For custom polarity, blanks, or QC labels, provide a sample sheet path.",
+                className="small text-primary mb-2",
+            ),
+            dbc.Label("Vendor conversion sample sheet path", className="small fw-semibold"),
+            dbc.Input(
+                id="vendor-conversion-samplesheet-input",
+                type="text",
+                placeholder="/path/to/vendor_samples.csv",
+                size="sm",
+                className="mb-1",
+            ),
+            html.Div("Optional columns: vendor_format for .d directories, polarity for positive/negative mode.", className="small text-muted"),
+        ],
+        "vendor-conversion-params",
     )
 
 
@@ -1176,16 +2343,42 @@ sidebar = html.Div(
         html.Div(id="upload-placeholder", className="mb-2"),
         html.Div(
             [
-                html.H6("Upload FASTQ files"),
-                upload_box("fastq-upload", "Select or drop FASTQ files here", ".fastq, .fastq.gz, .fq, .fq.gz", True),
-                html.H6("Upload sample sheet / metadata"),
-                upload_box("metadata-upload", "Select/drop sample sheet, metadata, counts, or contrasts CSV/TSV here", ".csv, .tsv, .xlsx", False),
-                html.H6("Upload reference files"),
-                upload_box(
-                    "reference-upload",
-                    "Select or drop reference FASTA/GTF/tx2gene/index archive here",
-                    ".fa, .fa.gz, .gtf, .gtf.gz, .tsv, .zip, .tar.gz",
-                    True,
+                html.Div(
+                    [
+                        html.H6("Upload FASTQ files"),
+                        upload_box("fastq-upload", "Select or drop FASTQ files here", ".fastq, .fastq.gz, .fq, .fq.gz", True),
+                    ],
+                    id="fastq-upload-wrapper",
+                ),
+                html.H6(id="metadata-upload-heading"),
+                upload_box("metadata-upload", "Select/drop assay/library CSV, sample metadata, counts, or contrasts CSV/TSV here", ".csv, .tsv, .xlsx", False),
+                html.Div(
+                    [
+                        html.H6("Upload reference files"),
+                        upload_box(
+                            "reference-upload",
+                            "Select or drop reference FASTA/GTF/tx2gene/index archive here",
+                            ".fa, .fa.gz, .gtf, .gtf.gz, .tsv, .zip, .tar.gz",
+                            True,
+                        ),
+                    ],
+                    id="reference-upload-wrapper",
+                ),
+                html.Div(
+                    [
+                        html.H6("Upload vendor RAW/mzML files"),
+                        upload_box(
+                            "vendor-upload",
+                            "Select/drop Thermo RAW, mzML, or zipped Agilent/Bruker .d examples here",
+                            ".raw, .RAW, .mzML, .mzML.gz, .zip, .tar.gz",
+                            True,
+                        ),
+                        html.Div(
+                            "For .d directories, zip/tar the folder first or use a sample sheet path pointing to the server-side .d folder.",
+                            className="small text-muted mb-2",
+                        ),
+                    ],
+                    id="vendor-upload-wrapper",
                 ),
             ],
             id="upload-panel",
@@ -1193,12 +2386,13 @@ sidebar = html.Div(
         html.Div(id="upload-message", className="small mb-2"),
 
         dbc.Alert(
-            "This visible uploader is for demo/test files. Production FASTQ uploads should use the tus plan.",
+            "This visible uploader is for demo/test files. Use server-side paths or managed upload plans for large production data.",
             color="info",
             className="small",
         ),
 
-        html.H6("Uploaded files"),
+        html.H6("Select uploaded input files"),
+        html.Div(id="selected-files-help", className="small text-primary mb-2"),
         dbc.Input(
             id="file-search",
             type="text",
@@ -1208,13 +2402,7 @@ sidebar = html.Div(
         ),
         dbc.Select(
             id="file-category-filter",
-            options=[
-                {"label": "All categories", "value": "all"},
-                {"label": "FASTQ only", "value": "fastq"},
-                {"label": "Metadata only", "value": "metadata"},
-                {"label": "Reference only", "value": "reference"},
-                {"label": "Other only", "value": "other"},
-            ],
+            options=[],
             value="all",
             size="sm",
             className="mb-2",
@@ -1230,7 +2418,10 @@ sidebar = html.Div(
         ),
 
         html.H6("Workflow setup"),
+        html.Div(vendor_conversion_panel(), id="vendor-conversion-panel", className="mb-3"),
+        html.Div(lcms_module_parameter_panel(), id="lcms-module-panel", className="mb-3"),
         html.Div(downstream_parameter_panel(), id="downstream-panel", className="mb-3"),
+        html.Div(targeted_lcms_parameter_panel(), id="targeted-lcms-panel", className="mb-3"),
         html.Div(strandedness_input_panel(), id="strandedness-input-wrapper", className="mb-3"),
         html.Div(reference_parameter_panel(), id="reference-panel", className="mb-3"),
         dbc.Switch(
@@ -1479,6 +2670,19 @@ def get_outputs(job_id):
     )
 
 
+@server.get(f"{API_PREFIX}/templates/targeted-lcms/<kind>")
+def download_targeted_lcms_template(kind):
+    filename = TARGETED_LCMS_TEMPLATES.get(kind)
+    if not filename:
+        return jsonify({"error": "Unknown targeted LC-MS template"}), 404
+    path = (TARGETED_LCMS_TEMPLATE_DIR / filename).resolve()
+    if not is_relative_to(path, TARGETED_LCMS_TEMPLATE_DIR.resolve()):
+        return jsonify({"error": "Template path is not allowed"}), 403
+    if not path.exists() or not path.is_file():
+        return jsonify({"error": "Template file not found"}), 404
+    return send_file(path, as_attachment=True, download_name=filename)
+
+
 @server.get(f"{API_PREFIX}/file")
 def get_file():
     path = Path(request.args.get("path", ""))
@@ -1517,7 +2721,7 @@ def is_relative_to(path: Path, root: Path) -> bool:
 
 def selected_files_by_category(selected_paths: list[str], tester_id: str, omics_type: str, project_id: str) -> dict[str, list[str]]:
     root = (APP_ROOT / "uploads" / safe_slug(omics_type) / safe_slug(tester_id) / safe_slug(project_id)).resolve()
-    selected = {"fastq": [], "metadata": [], "other": []}
+    selected = {"fastq": [], "metadata": [], "reference": [], "vendor": [], "other": []}
     for raw_path in selected_paths or []:
         path = Path(raw_path).resolve()
         if not is_relative_to(path, root) or not path.is_file():
@@ -1552,12 +2756,14 @@ def workflow_has_strandedness(workflow_id: str) -> bool:
 
 def workflow_has_reference(workflow_id: str) -> bool:
     step = next((s for s in steps if s["id"] == workflow_id), None)
-    return bool(step and "rnaseq_06a_reference_build_validation" in step.get("selected_steps", []))
+    selected = step.get("selected_steps", []) if step else []
+    return bool(step and ("rnaseq_06a_reference_build_validation" in selected or "genomics_02_reference_prepare" in selected))
 
 
 def workflow_has_raw_qc(workflow_id: str) -> bool:
     step = next((s for s in steps if s["id"] == workflow_id), None)
-    return bool(step and "rnaseq_03_raw_read_qc" in step.get("selected_steps", []))
+    selected = step.get("selected_steps", []) if step else []
+    return bool(step and ("rnaseq_03_raw_read_qc" in selected or "genomics_03_raw_qc" in selected))
 
 
 def workflow_is_strandedness_only(workflow_id: str) -> bool:
@@ -1826,7 +3032,8 @@ def file_list_component(
     category_filter: str,
     current_selection: list[str] | None,
 ):
-    records = job_store.list_upload_records(tester_id, omics_type, project_id)
+    all_records = workspace_upload_records(tester_id, omics_type, project_id)
+    records = list(all_records)
     search = (search or "").lower()
     if category_filter and category_filter != "all":
         records = [record for record in records if record.get("category") == category_filter]
@@ -1834,6 +3041,13 @@ def file_list_component(
         records = [record for record in records if search in (record.get("filename") or "").lower()]
 
     if not records:
+        if all_records:
+            return html.Div(
+                [
+                    html.Div("No files match the current filter/search.", className="text-muted"),
+                    html.Div("Set the filter to All metabolomics uploads / All categories to see everything.", className="small text-primary"),
+                ]
+            ), [], []
         return html.Div("No uploaded files yet.", className="text-muted"), [], []
 
     options = []
@@ -1842,12 +3056,13 @@ def file_list_component(
     for record in records:
         path = record["stored_path"]
         available_values.add(path)
+        kind = student_upload_kind(record, omics_type)
         label = (
-            f"{record['filename']} | {record['category']} | {record['size_bytes']} bytes | "
+            f"{record['filename']} | {kind} | {record['size_bytes']} bytes | "
             f"{record['created_at']} | session {record['session_id']}"
         )
         options.append({"label": label, "value": path})
-        if record["category"] in {"fastq", "metadata"}:
+        if record["category"] in {"fastq", "metadata", "vendor"}:
             default_values.append(path)
 
     info = html.Div(f"{len(records)} file(s) in this project. Select files to use for the next run.", className="text-muted")
@@ -2027,6 +3242,211 @@ def show_downstream_parameters(workflow_id, omics_type):
 
 
 @app.callback(
+    Output("targeted-lcms-panel", "style"),
+    Output("targeted-lcms-required-help", "children"),
+    Input("workflow-select", "value"),
+    Input("omics-select", "value"),
+)
+def show_targeted_lcms_parameters(workflow_id, omics_type):
+    if omics_type == "metabolomics" and workflow_is_targeted_lcms(workflow_id):
+        return {"display": "block"}, targeted_lcms_help(workflow_id)
+    return {"display": "none"}, ""
+
+
+@app.callback(
+    Output("vendor-conversion-panel", "style"),
+    Input("workflow-select", "value"),
+    Input("omics-select", "value"),
+)
+def show_vendor_conversion_parameters(workflow_id, omics_type):
+    if omics_type == "metabolomics" and workflow_is_vendor_conversion(workflow_id):
+        return {"display": "block"}
+    return {"display": "none"}
+
+
+@app.callback(
+    Output("lcms-module-panel", "style"),
+    Output("lcms-module-required-help", "children"),
+    Input("workflow-select", "value"),
+    Input("omics-select", "value"),
+)
+def show_lcms_module_parameters(workflow_id, omics_type):
+    if omics_type == "metabolomics" and workflow_is_lcms_module_runner(workflow_id):
+        mode = steps_by_id.get(workflow_id, {}).get("lcms_mode", "intake_qc")
+        help_text = {
+            "intake_qc": "Runs S1-S5: validate mzML inputs and centroiding status.",
+            "feature_detection": "Runs S1-S5 plus U123: featureXML and feature summaries.",
+            "matrix_qc": "Runs S1-S5, U123, and U4-U9: raw feature matrix and QC CSVs.",
+        }.get(mode, "Runs LC-MS mzML atomic stages.")
+        return {"display": "block"}, help_text
+    return {"display": "none"}, ""
+
+
+@app.callback(
+    Output("fastq-upload-wrapper", "style"),
+    Output("reference-upload-wrapper", "style"),
+    Output("metadata-upload-heading", "children"),
+    Input("omics-select", "value"),
+)
+def show_upload_sections(omics_type):
+    if omics_type == "metabolomics":
+        return (
+            {"display": "none"},
+            {"display": "none"},
+            "Upload metadata / assay CSV files",
+        )
+    return (
+        {"display": "block"},
+        {"display": "block"},
+        "Upload sample sheet / metadata",
+    )
+
+
+@app.callback(
+    Output("vendor-upload-wrapper", "style"),
+    Input("omics-select", "value"),
+)
+def show_vendor_upload(omics_type):
+    if omics_type == "metabolomics":
+        return {"display": "block"}
+    return {"display": "none"}
+
+
+@app.callback(
+    Output("file-category-filter", "options"),
+    Output("file-category-filter", "value"),
+    Input("omics-select", "value"),
+)
+def configure_file_category_filter(omics_type):
+    if omics_type == "metabolomics":
+        return [
+            {"label": "All metabolomics uploads", "value": "all"},
+            {"label": "Assay / metadata CSV", "value": "metadata"},
+            {"label": "mzML / RAW files", "value": "vendor"},
+            {"label": "Other files", "value": "other"},
+        ], "all"
+    return [
+        {"label": "All categories", "value": "all"},
+        {"label": "FASTQ only", "value": "fastq"},
+        {"label": "Metadata only", "value": "metadata"},
+        {"label": "Reference only", "value": "reference"},
+        {"label": "Other only", "value": "other"},
+    ], "all"
+
+
+@app.callback(
+    Output("selected-files-help", "children"),
+    Input("omics-select", "value"),
+)
+def selected_files_help_text(omics_type):
+    if omics_type == "metabolomics":
+        return "For targeted LC-MS, uploaded mzML files are auto-used. Choose the assay CSV in the Targeted LC-MS panel."
+    if omics_type == "genomics":
+        return "For Genomics, select uploaded FASTQ files or a CSV sample sheet. If none are selected, the human chr22 demo FASTQ/reference is used."
+    return "Select uploaded FASTQ files or a sample sheet for this RNA-seq workflow."
+
+
+@app.callback(
+    Output("targeted-assay-upload-select", "options"),
+    Output("targeted-assay-upload-select", "value"),
+    Output("targeted-assay-select-message", "children"),
+    Input("workflow-select", "value"),
+    Input("uploaded-files-list", "children"),
+    Input("upload-message", "children"),
+    State("tester-select", "value"),
+    State("omics-select", "value"),
+    State("project-select", "value"),
+    State("targeted-assay-upload-select", "value"),
+)
+def populate_targeted_assay_upload_select(workflow_id, _uploaded_children, _upload_message, tester_id, omics_type, project_id, current_value):
+    if omics_type != "metabolomics" or not workflow_is_targeted_lcms(workflow_id) or not tester_id or not project_id:
+        return [], "", ""
+    records = workspace_upload_records(tester_id, omics_type, project_id)
+    demo_assay = default_targeted_lcms_inputs()["assay_table"]
+    candidates = [{"label": "Demo assay/library CSV", "value": demo_assay, "is_assay": True}]
+    for record in records:
+        if record.get("category") not in {"metadata", "other"}:
+            continue
+        path = record.get("stored_path") or ""
+        if not path.lower().endswith((".csv", ".tsv", ".xlsx")):
+            continue
+        if looks_like_targeted_assay(path):
+            candidates.append({"label": f"ASSAY: {Path(path).name}", "value": path, "is_assay": True})
+    options = [{"label": "Choose uploaded assay CSV...", "value": ""}] + [
+        {"label": item["label"], "value": item["value"]} for item in candidates
+    ]
+    valid_assay_values = {item["value"] for item in candidates if item["is_assay"]}
+    selected = current_value if current_value in valid_assay_values else ""
+    if not selected:
+        selected = next((item["value"] for item in candidates if item["is_assay"]), "")
+    if selected:
+        message = f"Assay selected: {Path(selected).name}"
+    elif len(candidates) > 1:
+        message = "Choose the assay/library CSV here before running."
+    else:
+        message = "Upload an assay/library CSV above; or use Demo assay/library CSV for testing."
+    return options, selected, message
+
+
+@app.callback(
+    Output("vendor-conversion-samplesheet-input", "value"),
+    Input("workflow-select", "value"),
+    Input("selected-files-checklist", "value"),
+    State("tester-select", "value"),
+    State("omics-select", "value"),
+    State("project-select", "value"),
+    State("vendor-conversion-samplesheet-input", "value"),
+)
+def autofill_vendor_conversion_inputs(workflow_id, selected_file_paths, tester_id, omics_type, project_id, current_samplesheet):
+    if not workflow_is_vendor_conversion(workflow_id):
+        raise PreventUpdate
+    if selected_file_paths and tester_id and project_id:
+        try:
+            selected_files = selected_files_by_category(selected_file_paths or [], tester_id, omics_type or "metabolomics", project_id)
+            inferred = _first_path_matching((selected_files.get("metadata") or []) + (selected_files.get("other") or []), ("sample", "samplesheet", "metadata", "vendor"))
+            return inferred or current_samplesheet
+        except ValueError:
+            pass
+    return current_samplesheet
+
+
+@app.callback(
+    Output("targeted-lcms-samplesheet-input", "value"),
+    Output("targeted-lcms-assay-input", "value"),
+    Input("workflow-select", "value"),
+    Input("selected-files-checklist", "value"),
+    Input("targeted-assay-upload-select", "value"),
+    State("tester-select", "value"),
+    State("omics-select", "value"),
+    State("project-select", "value"),
+    State("targeted-lcms-samplesheet-input", "value"),
+    State("targeted-lcms-assay-input", "value"),
+)
+def autofill_targeted_lcms_inputs(
+    workflow_id,
+    selected_file_paths,
+    selected_assay_upload,
+    tester_id,
+    omics_type,
+    project_id,
+    current_samplesheet,
+    current_assay,
+):
+    if not workflow_is_targeted_lcms(workflow_id):
+        raise PreventUpdate
+    inferred = {}
+    if selected_file_paths and tester_id and project_id:
+        try:
+            selected_files = selected_files_by_category(selected_file_paths or [], tester_id, omics_type or "metabolomics", project_id)
+            inferred.update({key: value for key, value in infer_targeted_lcms_selected_inputs(selected_files).items() if value})
+        except ValueError:
+            pass
+    assay_candidates = [selected_assay_upload, inferred.get("assay_table"), current_assay, default_targeted_lcms_inputs()["assay_table"]]
+    assay_value = next((path for path in assay_candidates if path and looks_like_targeted_assay(path)), None)
+    return inferred.get("samplesheet") or current_samplesheet, assay_value
+
+
+@app.callback(
     Output("downstream-counts-input", "value"),
     Output("downstream-metadata-input", "value"),
     Output("downstream-contrasts-input", "value"),
@@ -2108,7 +3528,7 @@ def toggle_advanced_options(show_advanced):
     Input("omics-select", "value"),
 )
 def show_raw_qc_parameters(workflow_id, omics_type):
-    if omics_type == "bulk_rnaseq" and workflow_has_raw_qc(workflow_id):
+    if omics_type in {"bulk_rnaseq", "genomics"} and workflow_has_raw_qc(workflow_id):
         return {"display": "block"}
     return {"display": "none"}
 
@@ -2120,6 +3540,8 @@ def show_raw_qc_parameters(workflow_id, omics_type):
 )
 def show_parameters(workflow_id, omics_type):
     if omics_type == "bulk_rnaseq" and workflow_has_trimming(workflow_id):
+        return {"display": "block"}
+    if omics_type == "genomics" and steps_by_id.get(workflow_id or "", {}).get("omics_type") == "genomics":
         return {"display": "block"}
     return {"display": "none"}
 
@@ -2141,7 +3563,7 @@ def show_strandedness_parameters(workflow_id, omics_type):
     Input("omics-select", "value"),
 )
 def show_reference_parameters(workflow_id, omics_type):
-    if omics_type == "bulk_rnaseq" and workflow_has_reference(workflow_id):
+    if omics_type in {"bulk_rnaseq", "genomics"} and workflow_has_reference(workflow_id):
         return {"display": "block"}
     return {"display": "none"}
 
@@ -2316,7 +3738,7 @@ def describe_strandedness_approval(value):
 def toggle_run_button(tester_id, omics_type, workflow_id):
     return not (
         tester_id
-        and omics_type == "bulk_rnaseq"
+        and omics_type in {"bulk_rnaseq", "metabolomics", "genomics"}
         and workflow_id in steps_by_id
         and omics_types.get(omics_type, {}).get("enabled")
     )
@@ -2327,9 +3749,11 @@ def toggle_run_button(tester_id, omics_type, workflow_id):
     Input("fastq-upload", "contents"),
     Input("metadata-upload", "contents"),
     Input("reference-upload", "contents"),
+    Input("vendor-upload", "contents"),
     State("fastq-upload", "filename"),
     State("metadata-upload", "filename"),
     State("reference-upload", "filename"),
+    State("vendor-upload", "filename"),
     State("current-session", "data"),
     State("tester-select", "value"),
     State("omics-select", "value"),
@@ -2340,9 +3764,11 @@ def save_dash_upload(
     fastq_contents,
     metadata_contents,
     reference_contents,
+    vendor_contents,
     fastq_names,
     metadata_name,
     reference_names,
+    vendor_names,
     session,
     tester_id,
     omics_type,
@@ -2359,7 +3785,7 @@ def save_dash_upload(
         return dbc.Alert("Select a student/tester before uploading files.", color="warning")
     if not project_id:
         return dbc.Alert("Select or create a project before uploading files.", color="warning")
-    if (omics_type or "bulk_rnaseq") != "bulk_rnaseq":
+    if (omics_type or "bulk_rnaseq") not in {"bulk_rnaseq", "metabolomics", "genomics"}:
         return dbc.Alert("Uploads for this omics type are under development.", color="warning")
     job_store.upsert_project(tester_id, omics_type or "bulk_rnaseq", safe_slug(project_id), project_label_from_id(project_id))
 
@@ -2394,13 +3820,20 @@ def save_dash_upload(
         )
 
         upload_type = "metadata"
-    else:
+    elif triggered == "reference-upload":
         contents = reference_contents or []
         names = reference_names or []
         if isinstance(contents, str):
             contents = [contents]
             names = [names]
         upload_type = "reference"
+    else:
+        contents = vendor_contents or []
+        names = vendor_names or []
+        if isinstance(contents, str):
+            contents = [contents]
+            names = [names]
+        upload_type = "vendor"
 
     saved = []
 
@@ -2431,7 +3864,29 @@ def save_dash_upload(
     except Exception as exc:
         return dbc.Alert(str(exc), color="danger")
 
-    return dbc.Alert(f"Uploaded {len(saved)} {upload_type} file(s).", color="success")
+    uploaded_items = []
+    for item in saved:
+        record = {
+            "stored_path": item["path"],
+            "category": upload_type,
+            "filename": item["filename"],
+        }
+        uploaded_items.append(
+            html.Li(
+                [
+                    html.Strong(item["filename"]),
+                    f" - {student_upload_kind(record, omics_type)}",
+                ]
+            )
+        )
+    return dbc.Alert(
+        [
+            html.Div(f"Uploaded {len(saved)} file(s)."),
+            html.Ul(uploaded_items, className="mb-1"),
+            html.Div("They should appear below under Select uploaded input files. For targeted LC-MS, assay CSVs also appear in the assay dropdown.", className="small"),
+        ],
+        color="success",
+    )
 
 
 @app.callback(
@@ -2521,12 +3976,13 @@ def autofill_reference_inputs(
     Input("project-select", "value"),
 )
 def show_step(workflow_id, omics_type, tester_id, project_id):
-    if omics_type != "bulk_rnaseq":
+    if omics_type not in {"bulk_rnaseq", "metabolomics", "genomics"}:
         return [
             html.H5(omics_label(omics_type)),
             html.P(omics_types.get(omics_type, {}).get("message", "This omics module is under development.")),
         ]
-    step = steps_by_id.get(workflow_id or "qc_trim", steps_by_id["qc_trim"])
+    default_workflow = omics_types.get(omics_type or "", {}).get("default_workflow", "qc_trim")
+    step = steps_by_id.get(workflow_id or default_workflow, steps_by_id.get(default_workflow, steps_by_id["qc_trim"]))
 
     return [
         html.H5(step.get("label", step["name"])),
@@ -2585,6 +4041,16 @@ def show_step(workflow_id, omics_type, tester_id, project_id):
     State("downstream-universe-input", "value"),
     State("downstream-gmt-input", "value"),
     State("downstream-gene_mapping-input", "value"),
+    State("targeted-lcms-samplesheet-input", "value"),
+    State("targeted-lcms-assay-input", "value"),
+    State("targeted-lcms-params-json-input", "value"),
+    State("targeted-param-mz-window", "value"),
+    State("targeted-param-rt-window", "value"),
+    State("targeted-param-snr", "value"),
+    State("targeted-param-peak-width", "value"),
+    State("lcms-input-dir-input", "value"),
+    State("lcms-samplesheet-input", "value"),
+    State("vendor-conversion-samplesheet-input", "value"),
     State("current-session", "data"),
     State("tester-select", "value"),
     State("omics-select", "value"),
@@ -2639,6 +4105,16 @@ def run_selected_step(
     downstream_universe,
     downstream_gmt,
     downstream_gene_mapping,
+    targeted_lcms_samplesheet,
+    targeted_lcms_assay,
+    targeted_lcms_params_json,
+    targeted_param_mz_window,
+    targeted_param_rt_window,
+    targeted_param_snr,
+    targeted_param_peak_width,
+    lcms_input_dir,
+    lcms_samplesheet,
+    vendor_conversion_samplesheet,
     session,
     tester_id,
     omics_type,
@@ -2660,10 +4136,16 @@ def run_selected_step(
         setup_errors.append("Select a student/tester.")
     if not project_id:
         setup_errors.append("Select or create a project.")
-    if omics_type != "bulk_rnaseq":
-        setup_errors.append("Only Bulk RNA-seq workflows are active right now.")
+    if omics_type not in {"bulk_rnaseq", "metabolomics", "genomics"}:
+        setup_errors.append("Only Bulk RNA-seq, genomics, and metabolomics workflows are active right now.")
     if workflow_id not in steps_by_id:
         setup_errors.append("Select an active workflow.")
+    elif omics_type == "metabolomics" and not (workflow_is_targeted_lcms(workflow_id) or workflow_is_vendor_conversion(workflow_id) or workflow_is_lcms_module_runner(workflow_id)):
+        setup_errors.append("Select an active metabolomics workflow.")
+    elif omics_type in {"bulk_rnaseq", "genomics"} and (workflow_is_targeted_lcms(workflow_id) or workflow_is_vendor_conversion(workflow_id) or workflow_is_lcms_module_runner(workflow_id)):
+        setup_errors.append("LC-MS workflows require the Metabolomics omics type.")
+    elif omics_type == "genomics" and steps_by_id.get(workflow_id, {}).get("omics_type") != "genomics":
+        setup_errors.append("Select an active genomics workflow.")
     if setup_errors:
         return current_job, dbc.Alert(html.Ul([html.Li(error) for error in setup_errors], className="mb-0"), color="danger")
 
@@ -2671,6 +4153,165 @@ def run_selected_step(
         selected_files = selected_files_by_category(selected_file_paths or [], tester_id, omics_type, project_id)
     except ValueError as exc:
         return current_job, dbc.Alert(str(exc), color="danger")
+
+    if workflow_is_vendor_conversion(workflow_id):
+        sample_sheet = normalize_empty(vendor_conversion_samplesheet)
+        vendor_files = selected_files.get("vendor") or []
+        if sample_sheet and not Path(str(sample_sheet)).exists():
+            return current_job, dbc.Alert("Vendor conversion sample sheet path does not exist.", color="danger")
+        if not sample_sheet and not vendor_files:
+            return current_job, dbc.Alert(
+                "Upload/select Thermo RAW or mzML files, or provide a vendor conversion sample sheet path.",
+                color="danger",
+            )
+        try:
+            run = start_vendor_conversion_dash_job(
+                workflow_id,
+                tester_id,
+                omics_type,
+                project_id,
+                session_id,
+                str(Path(str(sample_sheet)).resolve()) if sample_sheet else None,
+                vendor_files,
+            )
+        except Exception as exc:
+            return current_job, dbc.Alert(str(exc), color="danger")
+        return run, dbc.Alert(
+            [
+                html.Div(f"Started Step 0 vendor conversion run {run['run_id']}."),
+                html.Div("Outputs include conversion_manifest.tsv/json, per-sample logs, and converted_or_registered/*.mzML.", className="small mt-1"),
+                html.Div("If you uploaded RAW/mzML files, the run folder also contains inputs/generated_vendor_samplesheet.csv.", className="small mt-1"),
+            ],
+            color="success",
+        )
+
+    if workflow_is_lcms_module_runner(workflow_id):
+        sample_sheet = normalize_empty(lcms_samplesheet)
+        explicit_input_dir = normalize_empty(lcms_input_dir)
+        selected_mzml_files = [
+            path
+            for path in (selected_files.get("vendor") or []) + (selected_files.get("other") or [])
+            if is_mzml_path(path)
+        ]
+        if not selected_mzml_files and not sample_sheet and not explicit_input_dir:
+            selected_mzml_files = [
+                record["stored_path"]
+                for record in workspace_upload_records(tester_id, omics_type, project_id)
+                if record.get("category") in {"vendor", "other"} and is_mzml_path(record.get("stored_path") or "")
+            ]
+        input_dir = explicit_input_dir
+        if not sample_sheet and not selected_mzml_files:
+            input_dir = input_dir or default_lcms_module_inputs()["input_dir"]
+        if sample_sheet and not Path(str(sample_sheet)).exists():
+            return current_job, dbc.Alert("LC-MS sample sheet path does not exist.", color="danger")
+        if not sample_sheet and not selected_mzml_files and (not input_dir or not Path(str(input_dir)).is_dir()):
+            return current_job, dbc.Alert("Provide a valid mzML input folder, LC-MS sample sheet path, or upload/select mzML files.", color="danger")
+        try:
+            run = start_lcms_module_dash_job(
+                workflow_id,
+                tester_id,
+                omics_type,
+                project_id,
+                session_id,
+                str(Path(str(input_dir)).resolve()) if input_dir else None,
+                str(Path(str(sample_sheet)).resolve()) if sample_sheet else None,
+                selected_mzml_files=selected_mzml_files,
+            )
+        except Exception as exc:
+            return current_job, dbc.Alert(str(exc), color="danger")
+        return run, dbc.Alert(
+            [
+                html.Div(f"Started metabolomics mzML workflow run {run['run_id']}."),
+                html.Div("Outputs include S1-S5 manifests, and feature/matrix/QC CSVs when selected.", className="small mt-1"),
+                html.Div("Uploaded mzML files were used to generate inputs/generated_lcms_samplesheet.csv." if selected_mzml_files else "No uploaded mzML was selected, so the configured input folder/sample sheet was used.", className="small mt-1"),
+            ],
+            color="success",
+        )
+
+    if workflow_is_targeted_lcms(workflow_id):
+        selected_mzml_files = [
+            path
+            for path in (selected_files.get("vendor") or []) + (selected_files.get("other") or [])
+            if is_mzml_path(path)
+        ]
+        if not selected_mzml_files:
+            selected_mzml_files = [
+                record["stored_path"]
+                for record in workspace_upload_records(tester_id, omics_type, project_id)
+                if record.get("category") in {"vendor", "other"} and is_mzml_path(record.get("stored_path") or "")
+            ]
+        targeted_inputs = {
+            "samplesheet": normalize_empty(targeted_lcms_samplesheet),
+            "assay_table": normalize_empty(targeted_lcms_assay),
+        }
+        if targeted_inputs.get("samplesheet") and selected_mzml_files and not looks_like_targeted_samplesheet(str(targeted_inputs["samplesheet"])):
+            targeted_inputs["samplesheet"] = None
+        targeted_params = {"params_json": normalize_empty(targeted_lcms_params_json)}
+        missing = []
+        if targeted_inputs.get("samplesheet"):
+            if not Path(str(targeted_inputs["samplesheet"])).exists():
+                missing.append("Provide a valid targeted LC-MS sample metadata path, or leave it blank and select uploaded mzML files.")
+        elif not selected_mzml_files:
+            missing.append(
+                "Upload at least one mzML file under Upload vendor RAW/mzML files, or provide a sample metadata CSV/TSV path."
+            )
+        assay_value = targeted_inputs.get("assay_table")
+        if not assay_value or not Path(str(assay_value)).exists():
+            missing.append(
+                "Provide a valid targeted LC-MS assay/library CSV/TSV path. Targeted analysis needs a target list. "
+                "Download the assay/library template from the Targeted LC-MS inputs panel."
+            )
+        elif not looks_like_targeted_assay(str(assay_value)):
+            missing.append(
+                f"{Path(str(assay_value)).name} is not a targeted assay/library table. "
+                "Choose Demo assay/library CSV or upload a CSV with target_id, target_name, mass/formula, charge, expected_rt_s, rt_range_s, and polarity."
+            )
+        params_json = targeted_params.get("params_json")
+        if params_json and not Path(str(params_json)).exists():
+            missing.append("Provide a valid MetaboIdent params JSON path, or leave it blank.")
+        if missing:
+            return None, dbc.Alert(
+                [
+                    html.Div("Targeted LC-MS run was not started. No previous/demo outputs are shown for this request."),
+                    html.Ul([html.Li(error) for error in missing], className="mb-0"),
+                ],
+                color="danger",
+            )
+        try:
+            params_for_run = {key: str(Path(str(value)).resolve()) for key, value in targeted_params.items() if value}
+            if not params_for_run:
+                temp_run_dir = APP_ROOT / "runs" / safe_slug(omics_type) / safe_slug(tester_id) / safe_slug(project_id) / "_targeted_param_profiles"
+                temp_run_dir.mkdir(parents=True, exist_ok=True)
+                generated = write_targeted_params_profile(
+                    temp_run_dir,
+                    {
+                        "extract:mz_window": targeted_param_mz_window,
+                        "extract:rt_window": targeted_param_rt_window,
+                        "detect:signal_to_noise": targeted_param_snr,
+                        "detect:peak_width": targeted_param_peak_width,
+                    },
+                )
+                if generated:
+                    params_for_run["params_json"] = generated
+            run = start_targeted_lcms_dash_job(
+                workflow_id,
+                tester_id,
+                omics_type,
+                project_id,
+                session_id,
+                {key: str(Path(str(value)).resolve()) for key, value in targeted_inputs.items() if value},
+                params_for_run,
+                selected_mzml_files=selected_mzml_files,
+            )
+        except Exception as exc:
+            return None, dbc.Alert(f"Targeted LC-MS run was not started: {exc}", color="danger")
+        return run, dbc.Alert(
+            [
+                html.Div(f"Started targeted LC-MS run {run['run_id']}."),
+                html.Div("Outputs include validation files, featureXML, QC CSVs, and target_by_sample_long.csv.", className="small mt-1"),
+            ],
+            color="success",
+        )
 
     if workflow_is_downstream(workflow_id):
         if workflow_id == "downstream_airway_all_atomics":
@@ -2728,7 +4369,7 @@ def run_selected_step(
         if manifest_errors:
             return current_job, dbc.Alert(html.Ul([html.Li(error) for error in manifest_errors], className="mb-0"), color="danger")
     else:
-        if workflow_needs_fastq_input(workflow_id) and not selected_files["fastq"]:
+        if workflow_needs_fastq_input(workflow_id) and not selected_files["fastq"] and omics_type != "genomics":
             return current_job, dbc.Alert("Select at least one FASTQ file for this workflow.", color="danger")
         if uses_existing_trimmed_reads:
             pair_errors = workflow_service.validate_fastq_pairs(selected_files["fastq"])
@@ -2830,13 +4471,24 @@ def refresh_job(_, current_job, session, tester_id, omics_type, project_id):
             if session_id and tester_id
             else []
         )
+        refreshed_jobs = []
+        for recent_job in jobs:
+            if (
+                workflow_is_downstream(recent_job.get("workflow_id"))
+                or workflow_is_targeted_lcms(recent_job.get("workflow_id"))
+                or workflow_is_vendor_conversion(recent_job.get("workflow_id"))
+                or workflow_is_lcms_module_runner(recent_job.get("workflow_id"))
+            ):
+                refreshed_jobs.append(refresh_simple_wrapper_job(recent_job))
+            else:
+                refreshed_jobs.append(recent_job)
+        jobs = refreshed_jobs
 
         return (
             html.Div(
                 [
                     html.P("No active job."),
-                    html.H6("Recent jobs in this workspace"),
-                    html.Pre(json.dumps(jobs, indent=2)[:2000]),
+                    recent_jobs_summary(jobs),
                 ]
             ),
             "",
@@ -2848,7 +4500,13 @@ def refresh_job(_, current_job, session, tester_id, omics_type, project_id):
     if not job:
         return "Job not found.", "", "No outputs."
     if workflow_is_downstream(job.get("workflow_id")):
-        job = refresh_downstream_job(job)
+        job = refresh_simple_wrapper_job(job)
+    if workflow_is_targeted_lcms(job.get("workflow_id")):
+        job = refresh_simple_wrapper_job(job)
+    if workflow_is_vendor_conversion(job.get("workflow_id")):
+        job = refresh_simple_wrapper_job(job)
+    if workflow_is_lcms_module_runner(job.get("workflow_id")):
+        job = refresh_simple_wrapper_job(job)
     if tester_id and (
         job.get("tester_id") != tester_id
         or job.get("omics_type") != omics_type
@@ -2857,25 +4515,17 @@ def refresh_job(_, current_job, session, tester_id, omics_type, project_id):
     ):
         return "This job belongs to a different workspace.", "", "No outputs."
 
-    stdout = (
-        Path(job["stdout_path"]).read_text(errors="replace")[-4000:]
-        if job.get("stdout_path") and Path(job["stdout_path"]).exists()
-        else ""
-    )
-
-    stderr = (
-        Path(job["stderr_path"]).read_text(errors="replace")[-4000:]
-        if job.get("stderr_path") and Path(job["stderr_path"]).exists()
-        else ""
-    )
+    stdout = read_text_tail(job.get("stdout_path"), 4000)
+    stderr = read_text_tail(job.get("stderr_path"), 4000)
 
     record = (
-        downstream_execution_record(job)
-        if workflow_is_downstream(job.get("workflow_id"))
+        simple_results_execution_record(job)
+        if workflow_is_downstream(job.get("workflow_id")) or workflow_is_targeted_lcms(job.get("workflow_id")) or workflow_is_vendor_conversion(job.get("workflow_id")) or workflow_is_lcms_module_runner(job.get("workflow_id"))
         else workflow_service.execution_record(job["job_id"], refresh=False)
     )
     files = record.get("all_result_files") or workflow_service.output_files(job["job_id"])
 
+    displayed_files = files[:250]
     output_links = [
         html.Li(
             html.A(
@@ -2887,8 +4537,10 @@ def refresh_job(_, current_job, session, tester_id, omics_type, project_id):
                 target="_blank",
             )
         )
-        for path in files
+        for path in displayed_files
     ] or [html.Li("No output files discovered yet.")]
+    if len(files) > len(displayed_files):
+        output_links.append(html.Li(f"Showing first {len(displayed_files)} of {len(files)} files. Use the run folder for the full output set."))
 
     job_status = str(job.get("status", "unknown")).lower()
 
@@ -2988,6 +4640,10 @@ def refresh_job(_, current_job, session, tester_id, omics_type, project_id):
                 run_parameter_summary(submitted_params, job_selected_steps),
                 strandedness_result_summary(files)
                 if submitted_params.get("strandedness_method") or any(path.endswith(".strandedness_call.json") for path in files)
+                else None,
+                targeted_manifest_summary(files) if workflow_is_targeted_lcms(job.get("workflow_id")) else None,
+                targeted_quick_files(files, job, session_id, tester_id, omics_type, project_id)
+                if workflow_is_targeted_lcms(job.get("workflow_id"))
                 else None,
                 selected_file_summary(selected_files),
             ]

@@ -1,0 +1,9 @@
+{% if 'genomics_12_variant_filtering' in request.selected_steps %}
+    GENOMICS_MULTIQC_REPORT(GENOMICS_VARIANT_FILTERING.out.manifest)
+{% elif 'genomics_08_coverage_qc' in request.selected_steps %}
+    GENOMICS_MULTIQC_REPORT(GENOMICS_COVERAGE_QC.out.manifest)
+{% elif 'genomics_06_bam_processing' in request.selected_steps %}
+    GENOMICS_MULTIQC_REPORT(GENOMICS_BAM_PROCESSING.out.manifest)
+{% else %}
+    GENOMICS_MULTIQC_REPORT(file(params.input, checkIfExists: true))
+{% endif %}

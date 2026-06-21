@@ -1,4 +1,356 @@
 steps:
+  - id: genomics_input_validation
+    name: "Genomics 01 - Input validation"
+    label: "Genomics 01 - Input validation"
+    omics_type: genomics
+    enabled: true
+    description: Validate FASTQ/BAM/VCF manifests and paired-end FASTQ consistency.
+    selected_steps: [genomics_01_input_validation]
+
+  - id: genomics_reference_prepare
+    name: "Genomics 02 - DNA reference preparation"
+    label: "Genomics 02 - DNA reference preparation"
+    omics_type: genomics
+    enabled: true
+    description: Prepare lightweight DNA reference bundle metadata from a genome FASTA.
+    selected_steps: [genomics_02_reference_prepare]
+
+  - id: genomics_raw_qc
+    name: "Genomics 03 - Raw FASTQ QC"
+    label: "Genomics 03 - Raw FASTQ QC"
+    omics_type: genomics
+    enabled: true
+    description: Validate FASTQ inputs and write minimal raw QC metrics.
+    selected_steps: [genomics_01_input_validation, genomics_03_raw_qc]
+
+  - id: genomics_trim_fastq
+    name: "Genomics 04 - FASTQ trimming"
+    label: "Genomics 04 - FASTQ trimming"
+    omics_type: genomics
+    enabled: true
+    description: Validate FASTQ inputs and write trimmed FASTQ files plus a manifest.
+    selected_steps: [genomics_01_input_validation, genomics_04_trim_fastq]
+
+  - id: genomics_bwa_alignment
+    name: "Genomics 05 - BWA-MEM2/BWA alignment"
+    label: "Genomics 05 - BWA-MEM2/BWA alignment"
+    omics_type: genomics
+    enabled: true
+    description: Tool-gated DNA alignment atomic step. Requires bwa-mem2 or bwa before producing BAM outputs.
+    selected_steps: [genomics_05_bwa_alignment]
+
+  - id: genomics_bam_processing
+    name: "Genomics 06 - BAM sort/index/statistics"
+    label: "Genomics 06 - BAM sort/index/statistics"
+    omics_type: genomics
+    enabled: true
+    description: Tool-gated BAM processing atomic step. Requires samtools.
+    selected_steps: [genomics_06_bam_processing]
+
+  - id: genomics_mark_duplicates
+    name: "Genomics 07 - Mark duplicates"
+    label: "Genomics 07 - Mark duplicates"
+    omics_type: genomics
+    enabled: true
+    description: Tool-gated duplicate marking atomic step. Requires samtools markdup or Picard.
+    selected_steps: [genomics_07_mark_duplicates]
+
+  - id: genomics_coverage_qc
+    name: "Genomics 08 - Coverage QC"
+    label: "Genomics 08 - Coverage QC"
+    omics_type: genomics
+    enabled: true
+    description: Tool-gated coverage QC atomic step. Requires mosdepth or Qualimap.
+    selected_steps: [genomics_08_coverage_qc]
+
+  - id: genomics_bqsr
+    name: "Genomics 09 - BQSR"
+    label: "Genomics 09 - BQSR"
+    omics_type: genomics
+    enabled: true
+    description: Optional tool-gated GATK BaseRecalibrator/ApplyBQSR step. Requires GATK and known-sites VCFs.
+    selected_steps: [genomics_09_bqsr]
+
+  - id: genomics_germline_variants
+    name: "Genomics 10 - Germline SNV/Indel calling"
+    label: "Genomics 10 - Germline SNV/Indel calling"
+    omics_type: genomics
+    enabled: true
+    description: Tool-gated germline variant calling step. Requires GATK HaplotypeCaller or DeepVariant.
+    selected_steps: [genomics_10_germline_variants]
+
+  - id: genomics_somatic_variants
+    name: "Genomics 11 - Somatic variant calling"
+    label: "Genomics 11 - Somatic variant calling"
+    omics_type: genomics
+    enabled: true
+    description: Tool-gated somatic variant calling step. Requires GATK Mutect2.
+    selected_steps: [genomics_11_somatic_variants]
+
+  - id: genomics_variant_filtering
+    name: "Genomics 12 - Variant filtering"
+    label: "Genomics 12 - Variant filtering"
+    omics_type: genomics
+    enabled: true
+    description: Tool-gated VCF filtering step. Requires bcftools or GATK.
+    selected_steps: [genomics_12_variant_filtering]
+
+  - id: genomics_structural_variants
+    name: "Genomics 13 - Structural variant calling"
+    label: "Genomics 13 - Structural variant calling"
+    omics_type: genomics
+    enabled: true
+    description: Tool-gated SV calling step. Requires Manta, Delly, or Sniffles.
+    selected_steps: [genomics_13_structural_variants]
+
+  - id: genomics_cnv_calling
+    name: "Genomics 14 - CNV calling"
+    label: "Genomics 14 - CNV calling"
+    omics_type: genomics
+    enabled: true
+    description: Tool-gated CNV calling step. Requires CNVkit.
+    selected_steps: [genomics_14_cnv_calling]
+
+  - id: genomics_variant_annotation
+    name: "Genomics 15 - Variant annotation"
+    label: "Genomics 15 - Variant annotation"
+    omics_type: genomics
+    enabled: true
+    description: Tool-gated annotation step. Requires VEP or SnpEff.
+    selected_steps: [genomics_15_variant_annotation]
+
+  - id: genomics_multiqc_report
+    name: "Genomics 16 - MultiQC final report"
+    label: "Genomics 16 - MultiQC final report"
+    omics_type: genomics
+    enabled: true
+    description: Tool-gated final QC aggregation step. Requires MultiQC.
+    selected_steps: [genomics_16_multiqc_report]
+
+  - id: genomics_all_tool_inventory_chain
+    name: "Genomics chain - demo FASTQ plus all tool checks"
+    label: "Genomics chain - demo FASTQ plus all tool checks"
+    omics_type: genomics
+    enabled: true
+    description: Run demo FASTQ validation, QC, trimming, a downstream tool inventory, and provenance so students can test the whole Genomics surface safely.
+    selected_steps:
+      - genomics_01_input_validation
+      - genomics_03_raw_qc
+      - genomics_04_trim_fastq
+      - genomics_17_tool_inventory
+      - genomics_99_provenance_manifest
+
+  - id: genomics_full_demo_chain
+    name: "Genomics chain - full demo step 1 to 16"
+    label: "Genomics chain - full demo step 1 to 16"
+    omics_type: genomics
+    enabled: true
+    description: Run every Genomics atomic step from validation through MultiQC. Foundation steps produce demo outputs; missing heavy tools are reported as skipped status JSON instead of breaking the demo run.
+    selected_steps:
+      - genomics_01_input_validation
+      - genomics_02_reference_prepare
+      - genomics_03_raw_qc
+      - genomics_04_trim_fastq
+      - genomics_05_bwa_alignment
+      - genomics_06_bam_processing
+      - genomics_07_mark_duplicates
+      - genomics_08_coverage_qc
+      - genomics_09_bqsr
+      - genomics_10_germline_variants
+      - genomics_11_somatic_variants
+      - genomics_12_variant_filtering
+      - genomics_13_structural_variants
+      - genomics_14_cnv_calling
+      - genomics_15_variant_annotation
+      - genomics_16_multiqc_report
+      - genomics_99_provenance_manifest
+
+  - id: genomics_fastq_foundation_chain
+    name: "Genomics chain - FASTQ validation, QC, trim, provenance"
+    label: "Genomics chain - FASTQ validation, QC, trim, provenance"
+    omics_type: genomics
+    enabled: true
+    description: Run the implemented genomics foundation chain before DNA alignment and variant calling.
+    selected_steps:
+      - genomics_01_input_validation
+      - genomics_03_raw_qc
+      - genomics_04_trim_fastq
+      - genomics_99_provenance_manifest
+
+  - id: lcms_s0_vendor_to_mzml
+    name: "Common 00 - RAW/vendor data to mzML"
+    label: "Common 00 - RAW/vendor data to mzML"
+    omics_type: metabolomics
+    enabled: true
+    description: Convert native Thermo RAW, Agilent .d, or Bruker .d data to mzML with pinned ProteoWizard Docker msconvert.
+    vendor_conversion: true
+    selected_steps: [lcms_S0_convert_or_register_mzml]
+
+  - id: lcms_mzml_intake_qc
+    name: "Common 01 - mzML intake and validation"
+    label: "Common 01 - mzML intake and validation"
+    omics_type: metabolomics
+    enabled: true
+    description: "Run LC-MS S1-S5 on mzML inputs: project setup, sample sheet validation, mzML registration, inspection, and centroiding gate."
+    lcms_module_runner: true
+    lcms_mode: intake_qc
+    selected_steps:
+      - lcms_S1_initialize_project
+      - lcms_S2_validate_sample_sheet
+      - lcms_S0_convert_or_register_mzml
+      - lcms_S3_register_mzml_inputs
+      - lcms_S4_inspect_mzml
+      - lcms_S5_centroiding_gate
+
+  - id: lcms_feature_detection
+    name: "Untargeted 02 - Peak detection"
+    label: "Untargeted 02 - Peak detection"
+    omics_type: metabolomics
+    enabled: true
+    description: "Run LC-MS S1-S5 plus U123 feature detection and write featureXML plus feature summaries."
+    lcms_module_runner: true
+    lcms_mode: feature_detection
+    selected_steps:
+      - lcms_S1_initialize_project
+      - lcms_S2_validate_sample_sheet
+      - lcms_S0_convert_or_register_mzml
+      - lcms_S3_register_mzml_inputs
+      - lcms_S4_inspect_mzml
+      - lcms_S5_centroiding_gate
+      - lcms_U123_detect_features_per_sample
+
+  - id: lcms_peak_alignment_matrix
+    name: "Untargeted 03 - Peak alignment and feature matrix"
+    label: "Untargeted 03 - Peak alignment and feature matrix"
+    omics_type: metabolomics
+    enabled: true
+    description: "Run LC-MS S1-S5, U123, and U4-U9 integration/matrix/QC. No normalization or annotation is performed."
+    lcms_module_runner: true
+    lcms_mode: matrix_qc
+    selected_steps:
+      - lcms_S1_initialize_project
+      - lcms_S2_validate_sample_sheet
+      - lcms_S0_convert_or_register_mzml
+      - lcms_S3_register_mzml_inputs
+      - lcms_S4_inspect_mzml
+      - lcms_S5_centroiding_gate
+      - lcms_U123_detect_features_per_sample
+      - lcms_U4_U9_integration_matrix_qc
+
+  - id: lcms_feature_matrix_qc
+    name: "Metabolomics matrix/QC - featureXML to raw feature matrix"
+    label: "Metabolomics matrix/QC - featureXML to raw feature matrix"
+    omics_type: metabolomics
+    enabled: true
+    description: Backward-compatible alias for Atomic 03 peak alignment and feature matrix.
+    lcms_module_runner: true
+    lcms_mode: matrix_qc
+    selected_steps:
+      - lcms_S1_initialize_project
+      - lcms_S2_validate_sample_sheet
+      - lcms_S0_convert_or_register_mzml
+      - lcms_S3_register_mzml_inputs
+      - lcms_S4_inspect_mzml
+      - lcms_S5_centroiding_gate
+      - lcms_U123_detect_features_per_sample
+      - lcms_U4_U9_integration_matrix_qc
+
+  - id: targeted_lcms_validate_inputs
+    name: "Targeted 01 - Validate mzML metadata and assay table"
+    label: "Targeted 01 - Validate mzML metadata and assay table"
+    omics_type: metabolomics
+    enabled: true
+    description: Validate mzML sample metadata and targeted assay/library table before peak detection.
+    targeted_lcms: true
+    targeted_mode: validate
+    selected_steps: [targeted_lcms_validate_inputs]
+
+  - id: targeted_lcms_peak_detection
+    name: "Targeted 02 - Peak detection"
+    label: "Targeted 02 - Peak detection"
+    omics_type: metabolomics
+    enabled: true
+    description: Detect targeted peaks with pyOpenMS FeatureFinderAlgorithmMetaboIdent and write featureXML plus diagnostics.
+    targeted_lcms: true
+    targeted_mode: run
+    selected_steps: [targeted_lcms_peak_detection]
+
+  - id: targeted_lcms_rt_alignment_diagnostic
+    name: "Targeted 03 - RT alignment diagnostics"
+    label: "Targeted 03 - RT alignment diagnostics"
+    omics_type: metabolomics
+    enabled: true
+    description: Report expected-vs-observed RT and drift diagnostics. Does not automatically change assay RT windows.
+    targeted_lcms: true
+    targeted_mode: run
+    selected_steps: [targeted_lcms_rt_alignment_diagnostic]
+
+  - id: targeted_lcms_metabolite_quantification
+    name: "Targeted 04 - Metabolite quantification CSV"
+    label: "Targeted 04 - Metabolite quantification CSV"
+    omics_type: metabolomics
+    enabled: true
+    description: Export target-by-sample long CSV, QC flags, RT diagnostics, and run manifest.
+    targeted_lcms: true
+    targeted_mode: run
+    selected_steps: [targeted_lcms_metabolite_quantification]
+
+  - id: targeted_lcms_full_pipeline
+    name: "Targeted chain - mzML to metabolite quantification"
+    label: "Targeted chain - mzML to metabolite quantification"
+    omics_type: metabolomics
+    enabled: true
+    description: Validate inputs, detect targeted peaks, report RT alignment diagnostics, and write metabolite quantification CSVs.
+    targeted_lcms: true
+    targeted_mode: run
+    selected_steps:
+      - targeted_lcms_validate_inputs
+      - targeted_lcms_peak_detection
+      - targeted_lcms_rt_alignment_diagnostic
+      - targeted_lcms_metabolite_quantification
+
+  - id: untargeted_lcms_full_pipeline
+    name: "Untargeted chain - mzML to feature matrix"
+    label: "Untargeted chain - mzML to feature matrix"
+    omics_type: metabolomics
+    enabled: true
+    description: Run mzML intake, untargeted peak detection, RT alignment, feature linking, raw matrix export, and QC CSV outputs.
+    lcms_module_runner: true
+    lcms_mode: matrix_qc
+    selected_steps:
+      - lcms_S1_initialize_project
+      - lcms_S2_validate_sample_sheet
+      - lcms_S0_convert_or_register_mzml
+      - lcms_S3_register_mzml_inputs
+      - lcms_S4_inspect_mzml
+      - lcms_S5_centroiding_gate
+      - lcms_U123_detect_features_per_sample
+      - lcms_U4_U9_integration_matrix_qc
+
+  - id: targeted_lcms_metaboident_quant
+    name: "Atomic T02 - MetaboIdent target quantification"
+    label: "Atomic T02 - MetaboIdent target quantification"
+    omics_type: metabolomics
+    enabled: true
+    description: Backward-compatible alias for targeted metabolite quantification.
+    targeted_lcms: true
+    targeted_mode: run
+    selected_steps: [targeted_lcms_metabolite_quantification]
+
+  - id: targeted_lcms_metaboident_chain
+    name: "Targeted LC-MS chain - mzML to quantification matrix"
+    label: "Targeted LC-MS chain - mzML to quantification matrix"
+    omics_type: metabolomics
+    enabled: true
+    description: Backward-compatible alias for targeted chain - mzML to metabolite quantification.
+    targeted_lcms: true
+    targeted_mode: run
+    selected_steps:
+      - targeted_lcms_validate_inputs
+      - targeted_lcms_peak_detection
+      - targeted_lcms_rt_alignment_diagnostic
+      - targeted_lcms_metabolite_quantification
+
   - id: downstream_merge_featurecounts
     name: "Atomic DS 01 - Merge count matrix"
     label: "Atomic DS 01 - Merge count matrix"

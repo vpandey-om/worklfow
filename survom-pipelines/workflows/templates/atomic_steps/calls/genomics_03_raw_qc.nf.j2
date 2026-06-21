@@ -1,0 +1,5 @@
+{% if 'genomics_01_input_validation' in request.selected_steps %}
+    GENOMICS_RAW_QC(GENOMICS_INPUT_VALIDATION.out.manifest)
+{% else %}
+    GENOMICS_RAW_QC(file(params.input, checkIfExists: true))
+{% endif %}

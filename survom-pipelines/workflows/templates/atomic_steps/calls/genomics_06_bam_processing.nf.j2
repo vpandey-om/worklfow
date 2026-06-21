@@ -1,0 +1,5 @@
+{% if 'genomics_05_bwa_alignment' in request.selected_steps %}
+    GENOMICS_BAM_PROCESSING(GENOMICS_BWA_ALIGN.out.manifest)
+{% else %}
+    GENOMICS_BAM_PROCESSING(file(params.input, checkIfExists: true))
+{% endif %}

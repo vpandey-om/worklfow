@@ -139,6 +139,9 @@ class WorkflowService:
             "rnaseq_07_salmon_quantification",
             "rnaseq_09_star_alignment",
             "rnaseq_09d_hisat2_alignment",
+            "genomics_01_input_validation",
+            "genomics_03_raw_qc",
+            "genomics_04_trim_fastq",
         }
         return bool(read_steps & set(selected_steps))
 
@@ -260,6 +263,26 @@ class WorkflowService:
     def _optional_param(value: Any) -> Any:
         return None if value == "" else value
 
+    def default_genomics_samplesheet(self, run_dir: Path) -> Path:
+        fastq_dir = self.pipeline_root.parent / "testdatasets" / "test_data" / "human_chr22_genomics" / "fastq"
+        r1 = fastq_dir / "genomics_test_R1.fastq.gz"
+        r2 = fastq_dir / "genomics_test_R2.fastq.gz"
+        if not r1.exists() or not r2.exists():
+            raise FileNotFoundError(f"Default genomics FASTQ demo files are missing under {fastq_dir}")
+        samplesheet = run_dir / "demo_genomics_samplesheet.csv"
+        samplesheet.write_text(
+            "sample_id,fastq_1,fastq_2,single_end\n"
+            f"genomics_test,{r1},{r2},false\n",
+            encoding="utf-8",
+        )
+        return samplesheet
+
+    def default_genomics_reference_fasta(self) -> str:
+        fasta = self.pipeline_root.parent / "testdatasets" / "test_data" / "human_chr22_rnaseq" / "refs" / "chr22_with_ERCC92.fa"
+        if not fasta.exists():
+            raise FileNotFoundError(f"Default genomics reference FASTA is missing: {fasta}")
+        return str(fasta)
+
     def create_run(
         self,
         session_id: str,
@@ -291,7 +314,12 @@ class WorkflowService:
                 raise ValueError("; ".join(manifest_errors))
             samplesheet = Path(trim_manifest).resolve()
         else:
-            samplesheet = self.create_or_find_samplesheet(sid, run_dir, tester, omics, project, selected_files)
+            try:
+                samplesheet = self.create_or_find_samplesheet(sid, run_dir, tester, omics, project, selected_files)
+            except ValueError:
+                if omics != "genomics":
+                    raise
+                samplesheet = self.default_genomics_samplesheet(run_dir)
 
         outdir = run_dir / "results"
         demo_reference = self.pipeline_root.parent / "refs" / "gallus_gallus_ensembl116" / "mini_ref"
@@ -343,7 +371,22 @@ class WorkflowService:
             "trim_manifest": trim_manifest,
             "threads": int(params.get("threads", 4) or 4),
         }
-        if "rnaseq_04_adapter_quality_trimming" not in selected_steps:
+        if omics == "genomics":
+            genomics_reference = (
+                self.default_genomics_reference_fasta()
+                if reference_mode == "demo_reference"
+                else self._optional_param(params.get("genome_fasta")) or self.default_genomics_reference_fasta()
+            )
+            resolved_params = {
+                "workflow_type": params.get("workflow_type", "dna_short_read"),
+                "genome_fasta": genomics_reference,
+                "reference_name": self._optional_param(params.get("reference_name")) or self._optional_param(params.get("genome_build")) or "human_chr22_demo",
+                "workflow_name": workflow_id,
+                "quality_cutoff": int(params.get("quality_threshold", params.get("quality_cutoff", 20)) or 20),
+                "min_length": int(params.get("minimum_read_length", params.get("min_length", 20)) or 20),
+                "threads": int(params.get("threads", 2) or 2),
+            }
+        elif "rnaseq_04_adapter_quality_trimming" not in selected_steps:
             if (
                 "rnaseq_06_strandedness_inference" not in selected_steps
                 and "rnaseq_06a_reference_build_validation" not in selected_steps
@@ -357,7 +400,7 @@ class WorkflowService:
                 }
         run_request = {
             "run_id": run_id,
-            "omics": "rnaseq",
+            "omics": "genomics" if omics == "genomics" else "rnaseq",
             "omics_type": omics,
             "tester_id": tester,
             "tester_label": tester_label or tester,

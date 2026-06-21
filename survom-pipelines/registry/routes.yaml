@@ -6,3 +6,22 @@ routes:
       - rnaseq_03_raw_read_qc
       - rnaseq_04_adapter_quality_trimming
     description: Initial RNA-seq FASTQ QC and adapter/quality trimming route.
+  lcms_untargeted_feature_quant:
+    omics: lcms
+    recommended_steps:
+      - lcms_S1_initialize_project
+      - lcms_S2_validate_sample_sheet
+      - lcms_S0_convert_or_register_mzml
+      - lcms_S3_register_mzml_inputs
+      - lcms_S4_inspect_mzml
+      - lcms_S5_centroiding_gate
+      - lcms_U123_detect_features_per_sample
+    description: LC-MS Module 1 intake plus Module 2 per-sample feature detection to durable featureXML.
+  genomics_fastq_foundation:
+    omics: genomics
+    recommended_steps:
+      - genomics_01_input_validation
+      - genomics_03_raw_qc
+      - genomics_04_trim_fastq
+      - genomics_99_provenance_manifest
+    description: Genomics FASTQ validation, lightweight QC, trim manifest generation, and provenance.

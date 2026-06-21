@@ -28,7 +28,8 @@ ALLOWED_REFERENCE_EXTENSIONS = (
     ".tar.gz",
     ".tgz",
 )
-ALLOWED_UPLOAD_TYPES = {"fastq", "metadata", "reference", "other"}
+ALLOWED_VENDOR_EXTENSIONS = (".raw", ".mzml", ".mzml.gz", ".zip", ".tar", ".tar.gz", ".tgz")
+ALLOWED_UPLOAD_TYPES = {"fastq", "metadata", "reference", "vendor", "other"}
 
 
 def safe_session_id(session_id: str) -> str:
@@ -62,6 +63,8 @@ def has_allowed_extension(filename: str, upload_type: str) -> bool:
         allowed = ALLOWED_METADATA_EXTENSIONS
     elif upload_type == "reference":
         allowed = ALLOWED_REFERENCE_EXTENSIONS
+    elif upload_type == "vendor":
+        allowed = ALLOWED_VENDOR_EXTENSIONS
     else:
         return False
     return lower.endswith(allowed)
@@ -98,7 +101,7 @@ class UploadService:
         project_id: str | None = None,
     ) -> Path:
         if upload_type not in ALLOWED_UPLOAD_TYPES:
-            raise ValueError("upload_type must be fastq, metadata, reference, or other")
+            raise ValueError("upload_type must be fastq, metadata, reference, vendor, or other")
         path = self.session_dir(session_id, tester_id, omics_type, project_id) / upload_type
         path.mkdir(parents=True, exist_ok=True)
         return path
@@ -207,9 +210,10 @@ class UploadService:
             "fastq": [],
             "metadata": [],
             "reference": [],
+            "vendor": [],
             "other": [],
         }
-        for upload_type in ("fastq", "metadata", "reference", "other"):
+        for upload_type in ("fastq", "metadata", "reference", "vendor", "other"):
             folder = session / upload_type
             if not folder.exists():
                 continue
@@ -236,12 +240,13 @@ class UploadService:
             "fastq": [],
             "metadata": [],
             "reference": [],
+            "vendor": [],
             "other": [],
         }
         if not workspace.exists():
             return result
         for session_dir in sorted(path for path in workspace.iterdir() if path.is_dir()):
-            for upload_type in ("fastq", "metadata", "reference", "other"):
+            for upload_type in ("fastq", "metadata", "reference", "vendor", "other"):
                 folder = session_dir / upload_type
                 if not folder.exists():
                     continue
